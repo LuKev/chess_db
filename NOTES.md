@@ -123,3 +123,20 @@
      - Games metadata eco query.
      - Position lookup (`game_positions_user_fen_idx`).
      - Opening tree lookup (`opening_stats_user_position_idx`).
+34. Productization follow-up tranche completed (2026-02-11):
+   - API additions:
+     - `GET /api/imports/:id/errors` with pagination for parse diagnostics.
+     - Bulk tag assignment/removal endpoints:
+       - `POST /api/tags/:id/games`
+       - `DELETE /api/tags/:id/games`
+   - Position material search response now includes game metadata/snippet fields (aligned with exact position search) to support direct viewer workflows in UI.
+   - Web UI improvements:
+     - Position search mode switch (`exact` vs `material`) with optional material key and side-to-move controls.
+     - Opening explorer “Dive” now also runs exact position search and attempts to jump the current viewer cursor to the matching FEN.
+     - Import jobs section now has diagnostics drill-down (parse error table) via `/api/imports/:id/errors`.
+     - Bulk collection/tag actions now support both add and remove paths from selected games.
+   - Added integration coverage in `apps/api/test/auth_games.integration.test.ts` for:
+     - CSRF origin enforcement on authenticated mutating requests.
+     - Production topology mismatch startup guard.
+     - Import diagnostics endpoint.
+     - Bulk tag assignment/removal and enriched material search payload.

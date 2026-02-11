@@ -75,6 +75,22 @@ type ImportListResponse = {
   items: ImportJob[];
 };
 
+type ImportErrorItem = {
+  id: number;
+  lineNumber: number | null;
+  gameOffset: number | null;
+  message: string;
+  createdAt: string;
+};
+
+type ImportErrorListResponse = {
+  importJobId: number;
+  page: number;
+  pageSize: number;
+  total: number;
+  items: ImportErrorItem[];
+};
+
 type SavedFilter = {
   id: number;
   name: string;
@@ -140,6 +156,7 @@ type PositionSearchRow = {
   gameId: number;
   ply: number;
   sideToMove: "w" | "b";
+  fenNorm?: string;
   white: string;
   black: string;
   result: string;
@@ -517,6 +534,11 @@ export default function Home() {
   const [strictDuplicateImport, setStrictDuplicateImport] = useState(false);
   const [importStatus, setImportStatus] = useState("Sign in to import PGN files");
   const [imports, setImports] = useState<ImportJob[]>([]);
+  const [selectedImportId, setSelectedImportId] = useState<number | null>(null);
+  const [importErrors, setImportErrors] = useState<ImportErrorItem[]>([]);
+  const [importErrorsStatus, setImportErrorsStatus] = useState(
+    "Select an import job to inspect parse errors"
+  );
 
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [filterPresets, setFilterPresets] = useState<FilterPreset[]>([]);
@@ -547,6 +569,11 @@ export default function Home() {
   const [positionSearchInput, setPositionSearchInput] = useState(
     "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5"
   );
+  const [positionSearchMode, setPositionSearchMode] = useState<"exact" | "material">(
+    "exact"
+  );
+  const [positionMaterialKeyInput, setPositionMaterialKeyInput] = useState("");
+  const [positionMaterialSideToMove, setPositionMaterialSideToMove] = useState("");
   const [positionSearchStatus, setPositionSearchStatus] = useState("Sign in to search positions");
   const [positionSearchResults, setPositionSearchResults] = useState<PositionSearchRow[]>([]);
   const [openingTree, setOpeningTree] = useState<OpeningTreeNode | null>(null);
@@ -600,6 +627,9 @@ export default function Home() {
     setGames(null);
     setSelectedGameIds([]);
     setImports([]);
+    setSelectedImportId(null);
+    setImportErrors([]);
+    setImportErrorsStatus("Select an import job to inspect parse errors");
     setExportJobs([]);
     setSavedFilters([]);
     setTags([]);
@@ -620,6 +650,9 @@ export default function Home() {
     setCurrentMoveGlyphs("");
     setEngineLines([]);
     setPositionSearchResults([]);
+    setPositionSearchMode("exact");
+    setPositionMaterialKeyInput("");
+    setPositionMaterialSideToMove("");
     setOpeningTree(null);
     setAuthMessage("Not signed in");
   }
@@ -825,6 +858,35 @@ export default function Home() {
     );
   }
 
+  async function refreshImportErrors(importJobId: number): Promise<void> {
+    if (!user) {
+      setImportErrors([]);
+      setImportErrorsStatus("Sign in to inspect import diagnostics");
+      return;
+    }
+    setSelectedImportId(importJobId);
+    setImportErrorsStatus(`Loading parse errors for import #${importJobId}...`);
+    const response = await fetchJson<ImportErrorListResponse>(
+      `/api/imports/${importJobId}/errors?page=1&pageSize=25`,
+      {
+        method: "GET",
+      }
+    );
+    if (response.status !== 200 || !("items" in response.data)) {
+      setImportErrors([]);
+      setImportErrorsStatus(
+        `Failed to load import diagnostics${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setImportErrors(response.data.items);
+    setImportErrorsStatus(
+      response.data.total > 0
+        ? `${response.data.total} parse error(s) for import #${importJobId}`
+        : `No parse errors for import #${importJobId}`
+    );
+  }
+
   async function refreshSavedFilters(): Promise<void> {
     if (!user) {
       setSavedFilters([]);
@@ -1017,33 +1079,78 @@ export default function Home() {
     await refreshCollections();
   }
 
+  async function removeSelectedGamesFromCollection(collectionId: number): Promise<void> {
+    if (!user || selectedGameIds.length === 0) {
+      return;
+    }
+    const response = await fetchJson<{ removedCount: number }>(
+      `/api/collections/${collectionId}/games`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ gameIds: selectedGameIds }),
+      }
+    );
+    if (response.status !== 200) {
+      setCollectionStatus(
+        `Failed to remove games from collection${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    const removedCount = "removedCount" in response.data ? response.data.removedCount : 0;
+    setCollectionStatus(`Removed ${removedCount} game(s) from collection`);
+    await refreshCollections();
+  }
+
   async function assignTagToSelectedGames(tagId: number): Promise<void> {
     if (!user || selectedGameIds.length === 0) {
       return;
     }
-    let assigned = 0;
-    for (const gameId of selectedGameIds) {
-      const response = await fetchJson<{ gameId: number; tagId: number }>(
-        `/api/games/${gameId}/tags/${tagId}`,
-        { method: "POST" }
-      );
-      if (response.status === 201) {
-        assigned += 1;
+    const response = await fetchJson<{ assignedCount: number }>(
+      `/api/tags/${tagId}/games`,
+      {
+        method: "POST",
+        body: JSON.stringify({ gameIds: selectedGameIds }),
       }
+    );
+    if (response.status !== 200) {
+      setTagStatus(
+        `Failed to assign tag${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
     }
-    setTagStatus(`Assigned tag to ${assigned} game(s)`);
+    const assignedCount = "assignedCount" in response.data ? response.data.assignedCount : 0;
+    setTagStatus(`Assigned tag to ${assignedCount} game(s)`);
     await Promise.all([refreshTags(), refreshGames(page)]);
   }
 
-  async function searchPosition(): Promise<void> {
-    if (!user) {
+  async function removeTagFromSelectedGames(tagId: number): Promise<void> {
+    if (!user || selectedGameIds.length === 0) {
       return;
     }
-    setPositionSearchStatus("Searching position...");
+    const response = await fetchJson<{ removedCount: number }>(
+      `/api/tags/${tagId}/games`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ gameIds: selectedGameIds }),
+      }
+    );
+    if (response.status !== 200) {
+      setTagStatus(
+        `Failed to remove tag${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    const removedCount = "removedCount" in response.data ? response.data.removedCount : 0;
+    setTagStatus(`Removed tag from ${removedCount} game(s)`);
+    await Promise.all([refreshTags(), refreshGames(page)]);
+  }
+
+  async function searchPositionExact(fen: string): Promise<void> {
+    setPositionSearchStatus("Searching exact position...");
     const response = await fetchJson<PositionSearchResponse>("/api/search/position", {
       method: "POST",
       body: JSON.stringify({
-        fen: positionSearchInput,
+        fen,
         page: 1,
         pageSize: 30,
       }),
@@ -1057,9 +1164,61 @@ export default function Home() {
     setPositionSearchResults(response.data.items);
     setPositionSearchStatus(
       response.data.total > 0
-        ? `${response.data.total} matching position(s)`
+        ? `${response.data.total} exact position match(es)`
         : "No matching positions"
     );
+  }
+
+  async function searchPositionMaterial(fen: string): Promise<void> {
+    setPositionSearchStatus("Searching by material...");
+    const response = await fetchJson<PositionSearchResponse>("/api/search/position/material", {
+      method: "POST",
+      body: JSON.stringify({
+        fen,
+        materialKey: positionMaterialKeyInput.trim() || undefined,
+        sideToMove:
+          positionMaterialSideToMove === "w" || positionMaterialSideToMove === "b"
+            ? positionMaterialSideToMove
+            : undefined,
+        page: 1,
+        pageSize: 30,
+      }),
+    });
+    if (response.status !== 200 || !("items" in response.data)) {
+      setPositionSearchStatus(
+        `Material search failed${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setPositionSearchResults(response.data.items);
+    setPositionSearchStatus(
+      response.data.total > 0
+        ? `${response.data.total} material match(es)`
+        : "No matching material positions"
+    );
+  }
+
+  async function searchPosition(): Promise<void> {
+    if (!user) {
+      return;
+    }
+    if (positionSearchMode === "material") {
+      await searchPositionMaterial(positionSearchInput);
+      return;
+    }
+    await searchPositionExact(positionSearchInput);
+  }
+
+  function jumpViewerToFen(fen: string): void {
+    if (!selectedGame || fenHistory.length === 0) {
+      return;
+    }
+    const normalizedTarget = fen.trim();
+    const index = fenHistory.findIndex((value) => value.trim() === normalizedTarget);
+    if (index >= 0) {
+      setCursor(index);
+      setViewerStatus(`Navigated viewer to matching opening position (ply ${index})`);
+    }
   }
 
   async function loadOpeningTree(fen: string): Promise<void> {
@@ -1082,6 +1241,12 @@ export default function Home() {
     }
     setOpeningTree(response.data.tree);
     setOpeningTreeStatus("Opening tree loaded");
+  }
+
+  async function diveOpeningMove(nextFen: string): Promise<void> {
+    setPositionSearchInput(nextFen);
+    jumpViewerToFen(nextFen);
+    await Promise.all([loadOpeningTree(nextFen), searchPositionExact(nextFen)]);
   }
 
   async function enqueueBackfill(): Promise<void> {
@@ -1170,6 +1335,27 @@ export default function Home() {
 
     await refreshGames(1);
     setPage(1);
+  }
+
+  async function createSampleImport(): Promise<void> {
+    if (!user) {
+      return;
+    }
+
+    setImportStatus("Queueing sample PGN import...");
+    const response = await fetchJson<{ id: number }>("/api/imports/sample", {
+      method: "POST",
+    });
+
+    if (response.status !== 201) {
+      setImportStatus(
+        `Failed to queue sample import${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+
+    setImportStatus(`Queued sample import job #${"id" in response.data ? response.data.id : "?"}`);
+    await refreshImports();
   }
 
   async function uploadImportFile(): Promise<void> {
@@ -1797,6 +1983,9 @@ export default function Home() {
           <li>{hasOpenedGame ? "Done" : "Pending"}: Open a game and start analysis/annotation.</li>
         </ol>
         <div className="button-row">
+          <button onClick={() => void createSampleImport()} disabled={!user}>
+            Import Sample PGN
+          </button>
           <button onClick={() => void createSampleGame()} disabled={!user}>
             Insert Sample Game
           </button>
@@ -1809,9 +1998,14 @@ export default function Home() {
       <section className="card">
         <div className="section-head">
           <h2>Database Home</h2>
-          <button onClick={() => void createSampleGame()} disabled={!user}>
-            Insert Sample Game
-          </button>
+          <div className="button-row">
+            <button onClick={() => void createSampleImport()} disabled={!user}>
+              Import Sample PGN
+            </button>
+            <button onClick={() => void createSampleGame()} disabled={!user}>
+              Insert Sample Game
+            </button>
+          </div>
         </div>
 
         <form className="filters" onSubmit={onFilterSubmit}>
@@ -1933,6 +2127,26 @@ export default function Home() {
               ))}
             </select>
           ) : null}
+          {collections.length > 0 ? (
+            <select
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isInteger(value) && value > 0) {
+                  void removeSelectedGamesFromCollection(value);
+                  event.currentTarget.value = "";
+                }
+              }}
+              defaultValue=""
+              disabled={!user || selectedGameIds.length === 0}
+            >
+              <option value="">Remove selected from collection</option>
+              {collections.map((collection) => (
+                <option key={collection.id} value={collection.id}>
+                  {collection.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
           {tags.length > 0 ? (
             <select
               onChange={(event) => {
@@ -1946,6 +2160,26 @@ export default function Home() {
               disabled={!user || selectedGameIds.length === 0}
             >
               <option value="">Tag selected games</option>
+              {tags.map((tag) => (
+                <option key={tag.id} value={tag.id}>
+                  {tag.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {tags.length > 0 ? (
+            <select
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isInteger(value) && value > 0) {
+                  void removeTagFromSelectedGames(value);
+                  event.currentTarget.value = "";
+                }
+              }}
+              defaultValue=""
+              disabled={!user || selectedGameIds.length === 0}
+            >
+              <option value="">Untag selected games</option>
               {tags.map((tag) => (
                 <option key={tag.id} value={tag.id}>
                   {tag.name}
@@ -2255,6 +2489,7 @@ export default function Home() {
                 <th>Parse Errors</th>
                 <th>Mode</th>
                 <th>Updated</th>
+                <th>Diagnostics</th>
               </tr>
             </thead>
             <tbody>
@@ -2270,16 +2505,56 @@ export default function Home() {
                   <td>{job.totals.parseErrors}</td>
                   <td>{job.strictDuplicateMode ? "strict" : "default"}</td>
                   <td>{new Date(job.updatedAt).toLocaleString()}</td>
+                  <td>
+                    <button
+                      onClick={() => void refreshImportErrors(job.id)}
+                      disabled={!user}
+                    >
+                      Inspect
+                    </button>
+                  </td>
                 </tr>
               ))}
               {imports.length === 0 ? (
                 <tr>
-                  <td colSpan={10}>No import jobs</td>
+                  <td colSpan={11}>No import jobs</td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        <p className="muted">{importErrorsStatus}</p>
+        {selectedImportId ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Error ID</th>
+                  <th>Line</th>
+                  <th>Game Offset</th>
+                  <th>Message</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importErrors.map((error) => (
+                  <tr key={error.id}>
+                    <td>{error.id}</td>
+                    <td>{error.lineNumber ?? "-"}</td>
+                    <td>{error.gameOffset ?? "-"}</td>
+                    <td>{error.message}</td>
+                    <td>{new Date(error.createdAt).toLocaleString()}</td>
+                  </tr>
+                ))}
+                {importErrors.length === 0 ? (
+                  <tr>
+                    <td colSpan={5}>No parse errors for this import job</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </section>
 
       <section className="card">
@@ -2403,11 +2678,34 @@ export default function Home() {
           <h2>Position Search</h2>
           <div className="button-row">
             <button onClick={() => void searchPosition()} disabled={!user}>
-              Search FEN
+              {positionSearchMode === "material" ? "Search Material" : "Search FEN"}
+            </button>
+            <button
+              onClick={() => {
+                if (currentFen) {
+                  setPositionSearchInput(currentFen);
+                }
+              }}
+              disabled={!user || !currentFen}
+            >
+              Use Viewer FEN
             </button>
           </div>
         </div>
         <div className="analysis-grid">
+          <label>
+            Mode
+            <select
+              value={positionSearchMode}
+              onChange={(event) =>
+                setPositionSearchMode(event.target.value === "material" ? "material" : "exact")
+              }
+              disabled={!user}
+            >
+              <option value="exact">Exact FEN</option>
+              <option value="material">Material Profile</option>
+            </select>
+          </label>
           <label>
             FEN
             <input
@@ -2416,6 +2714,31 @@ export default function Home() {
               disabled={!user}
             />
           </label>
+          {positionSearchMode === "material" ? (
+            <label>
+              Material Key (optional override)
+              <input
+                value={positionMaterialKeyInput}
+                onChange={(event) => setPositionMaterialKeyInput(event.target.value)}
+                placeholder="e.g. b:b1k1n2p7q1r2:w:b1k1n2p7q1r2"
+                disabled={!user}
+              />
+            </label>
+          ) : null}
+          {positionSearchMode === "material" ? (
+            <label>
+              Side to Move
+              <select
+                value={positionMaterialSideToMove}
+                onChange={(event) => setPositionMaterialSideToMove(event.target.value)}
+                disabled={!user}
+              >
+                <option value="">Either</option>
+                <option value="w">White</option>
+                <option value="b">Black</option>
+              </select>
+            </label>
+          ) : null}
         </div>
         <p className="muted">{positionSearchStatus}</p>
         <div className="table-wrap">
@@ -2425,6 +2748,7 @@ export default function Home() {
                 <th>Game</th>
                 <th>Ply</th>
                 <th>Players</th>
+                <th>FEN</th>
                 <th>Snippet</th>
                 <th>Open</th>
               </tr>
@@ -2437,6 +2761,7 @@ export default function Home() {
                   <td>
                     {row.white} vs {row.black} ({row.result})
                   </td>
+                  <td>{row.fenNorm ?? "-"}</td>
                   <td>
                     {row.snippet.before.join(" ")}{" "}
                     <strong>{row.snippet.at ?? ""}</strong>{" "}
@@ -2458,7 +2783,7 @@ export default function Home() {
               ))}
               {positionSearchResults.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>No position results</td>
+                  <td colSpan={6}>No position results</td>
                 </tr>
               ) : null}
             </tbody>
@@ -2503,8 +2828,7 @@ export default function Home() {
                       {move.nextFenNorm ? (
                         <button
                           onClick={() => {
-                            setPositionSearchInput(move.nextFenNorm ?? "");
-                            void loadOpeningTree(move.nextFenNorm ?? "");
+                            void diveOpeningMove(move.nextFenNorm ?? "");
                           }}
                         >
                           Dive

@@ -92,8 +92,10 @@ Notes:
    - `DELETE /api/filters/:id`
 4. Imports:
    - `POST /api/imports` (multipart `.pgn` / `.pgn.zst`)
+   - `POST /api/imports/sample`
    - `GET /api/imports`
    - `GET /api/imports/:id`
+   - `GET /api/imports/:id/errors`
 5. Analysis:
    - `POST /api/analysis`
    - `GET /api/analysis/:id`
@@ -115,6 +117,7 @@ Notes:
    - `POST/DELETE /api/collections/:id/games`
    - `POST/GET/DELETE /api/tags`
    - `POST/DELETE /api/games/:id/tags/:tagId`
+   - `POST/DELETE /api/tags/:id/games`
 10. Backfills:
    - `POST /api/backfill/positions`
    - `POST /api/backfill/openings`
