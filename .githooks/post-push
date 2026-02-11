@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Skip auto deploy when explicitly requested.
+if [[ "${SKIP_RAILWAY_AUTO_DEPLOY:-}" == "1" ]]; then
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+should_deploy=0
+
+# post-push stdin lines:
+# <local ref> <local sha1> <remote ref> <remote sha1>
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [[ "$remote_ref" == "refs/heads/main" ]]; then
+    should_deploy=1
+  fi
+done
+
+if [[ "$should_deploy" -ne 1 ]]; then
+  exit 0
+fi
+
+echo "[post-push] main updated -> deploying Railway services..."
+"$repo_root/scripts/railway_deploy_all.sh"
+
