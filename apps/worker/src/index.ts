@@ -42,7 +42,17 @@ initSentry({
 
 const pool = createPool(config);
 const storage = createObjectStorage(config);
-await storage.ensureBucket();
+try {
+  await storage.ensureBucket();
+} catch (error) {
+  if (config.s3StartupCheckStrict) {
+    throw error;
+  }
+  console.warn(
+    `[worker] proceeding without strict S3 startup check (import/export jobs may fail): ${String(error)}`
+  );
+  captureException(error);
+}
 const metrics = createWorkerMetrics();
 const metricsServer = startWorkerMetricsServer({
   metrics,

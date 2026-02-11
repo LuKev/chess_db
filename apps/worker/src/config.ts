@@ -11,6 +11,7 @@ export type WorkerConfig = {
   s3SecretKey: string;
   s3Bucket: string;
   s3ForcePathStyle: boolean;
+  s3StartupCheckStrict: boolean;
   stockfishBinary: string;
   analysisCancelPollMs: number;
   sentryDsn: string | null;
@@ -35,6 +36,7 @@ export function loadWorkerConfig(
   const s3SecretKey = env.S3_SECRET_KEY;
   const s3Bucket = env.S3_BUCKET;
   const s3ForcePathStyle = (env.S3_FORCE_PATH_STYLE ?? "true") === "true";
+  const s3StartupCheckStrict = (env.S3_STARTUP_CHECK_STRICT ?? "true") === "true";
   const stockfishBinary = env.STOCKFISH_BINARY ?? "stockfish";
   const rawAnalysisCancelPollMs = env.ANALYSIS_CANCEL_POLL_MS ?? "500";
   const analysisCancelPollMs = Number(rawAnalysisCancelPollMs);
@@ -86,6 +88,7 @@ export function loadWorkerConfig(
     s3SecretKey,
     s3Bucket,
     s3ForcePathStyle,
+    s3StartupCheckStrict,
     stockfishBinary,
     analysisCancelPollMs,
     sentryDsn,

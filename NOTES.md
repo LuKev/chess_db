@@ -71,3 +71,6 @@
 24. Deployment smoke checks:
    - Added `scripts/smoke_post_deploy.mjs` (health + register/login/me + import enqueue/status).
    - Railway deploy workflow now runs smoke checks and expects `SMOKE_API_BASE_URL` GitHub secret.
+25. New optional startup override for storage checks:
+   - `S3_STARTUP_CHECK_STRICT=true` (default) enforces fail-fast S3 validation at boot.
+   - Setting `S3_STARTUP_CHECK_STRICT=false` allows API/worker boot in degraded mode when S3 credentials are intentionally placeholder during rollout.

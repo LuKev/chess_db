@@ -121,7 +121,16 @@ export async function buildApp(
   if (options.runMigrationsOnBoot ?? config.autoMigrate) {
     await runMigrations(pool);
   }
-  await objectStorage.ensureBucket();
+  try {
+    await objectStorage.ensureBucket();
+  } catch (error) {
+    if (config.s3StartupCheckStrict) {
+      throw error;
+    }
+    console.warn(
+      `[api] proceeding without strict S3 startup check (import/export may fail): ${String(error)}`
+    );
+  }
 
   const app = Fastify({ logger: true });
   const apiMetrics = config.apiMetricsEnabled ? createApiMetrics() : null;

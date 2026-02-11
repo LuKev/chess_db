@@ -19,6 +19,10 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((value) => value === "true"),
+  S3_STARTUP_CHECK_STRICT: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
   API_METRICS_ENABLED: z
     .enum(["true", "false"])
     .default("true")
@@ -65,6 +69,7 @@ export type AppConfig = {
   s3SecretKey: string;
   s3Bucket: string;
   s3ForcePathStyle: boolean;
+  s3StartupCheckStrict: boolean;
   apiMetricsEnabled: boolean;
   apiMetricsPath: string;
   sentryDsn: string | null;
@@ -109,6 +114,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     s3SecretKey: parsed.data.S3_SECRET_KEY,
     s3Bucket: parsed.data.S3_BUCKET,
     s3ForcePathStyle: parsed.data.S3_FORCE_PATH_STYLE,
+    s3StartupCheckStrict: parsed.data.S3_STARTUP_CHECK_STRICT,
     apiMetricsEnabled: parsed.data.API_METRICS_ENABLED,
     apiMetricsPath: parsed.data.API_METRICS_PATH,
     sentryDsn: parsed.data.API_SENTRY_DSN?.trim()
