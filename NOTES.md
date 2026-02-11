@@ -43,3 +43,7 @@
 17. Performance harness scripts added:
    - `scripts/bench_import_throughput.mjs` and `scripts/bench_query_latency.mjs`.
    - Baseline run results are recorded in `docs/performance_baseline.md`.
+18. Railway production deploy requirement:
+   - `api` and `worker` now require S3-related env vars at boot (`S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`) and `api` also requires `SESSION_SECRET`.
+   - Missing these variables causes immediate startup crash on Railway.
+   - Current Railway production was set with placeholder S3 credentials to restore service boot; replace with real object-storage credentials for import/export to work correctly.
