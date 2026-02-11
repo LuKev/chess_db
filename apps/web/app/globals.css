@@ -122,6 +122,56 @@ button:disabled {
   overflow: hidden;
 }
 
+.fen-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.fen-editor-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.fen-editor-board .editor-square {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  padding: 0;
+}
+
+.fen-palette {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(54px, 1fr));
+  gap: 6px;
+}
+
+.palette-item {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  display: grid;
+  gap: 2px;
+  align-items: center;
+  justify-items: center;
+  padding: 6px 4px;
+}
+
+.palette-item.active {
+  border-color: #1b4d35;
+  background: #1b4d35;
+  color: #fff;
+}
+
+.palette-item small {
+  font-size: 10px;
+}
+
+.crumb-active {
+  border-color: #1b4d35;
+  background: #1b4d35;
+}
+
 .board-rank {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
@@ -195,6 +245,9 @@ textarea {
 
 @media (max-width: 920px) {
   .viewer-grid {
+    grid-template-columns: 1fr;
+  }
+  .fen-editor-grid {
     grid-template-columns: 1fr;
   }
 }

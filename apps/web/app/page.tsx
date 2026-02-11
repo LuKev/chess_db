@@ -246,7 +246,57 @@ type NotationLine = {
   anchorPly: number;
 };
 
+type CastlingFlags = {
+  K: boolean;
+  Q: boolean;
+  k: boolean;
+  q: boolean;
+};
+
+type FenEditorState = {
+  board: string[][];
+  stm: "w" | "b";
+  castling: CastlingFlags;
+  epSquare: string;
+  halfmove: number;
+  fullmove: number;
+};
+
+type AnnotationSnapshot = {
+  annotationText: string;
+  annotationHighlightsInput: string;
+  annotationArrowsInput: string;
+  currentMoveNote: string;
+  currentMoveGlyphs: string;
+  currentMoveVariationNote: string;
+  currentMoveHighlightsInput: string;
+  currentMoveArrowsInput: string;
+  moveNotesByPly: Record<string, unknown>;
+};
+
+const FEN_EDITOR_PIECES = [
+  "K",
+  "Q",
+  "R",
+  "B",
+  "N",
+  "P",
+  "k",
+  "q",
+  "r",
+  "b",
+  "n",
+  "p",
+  "",
+] as const;
+
 function apiBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname.toLowerCase();
+    if (host.endsWith("kezilu.com")) {
+      return "https://api.kezilu.com";
+    }
+  }
   if (process.env.NEXT_PUBLIC_API_BASE_URL) {
     return process.env.NEXT_PUBLIC_API_BASE_URL;
   }
@@ -254,9 +304,6 @@ function apiBaseUrl(): string {
     const host = window.location.hostname.toLowerCase();
     if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:4000";
-    }
-    if (host.endsWith("kezilu.com")) {
-      return "https://api.kezilu.com";
     }
   }
   return "http://localhost:4000";
@@ -484,11 +531,126 @@ function pieceToSymbol(piece: string): string {
   return map[piece] ?? "";
 }
 
+function emptyFenBoard(): string[][] {
+  return Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => ""));
+}
+
+function cloneFenBoard(board: string[][]): string[][] {
+  return board.map((rank) => [...rank]);
+}
+
+function castlingFlagsToString(flags: CastlingFlags): string {
+  const value = `${flags.K ? "K" : ""}${flags.Q ? "Q" : ""}${flags.k ? "k" : ""}${flags.q ? "q" : ""}`;
+  return value.length > 0 ? value : "-";
+}
+
+function castlingStringToFlags(raw: string): CastlingFlags {
+  return {
+    K: raw.includes("K"),
+    Q: raw.includes("Q"),
+    k: raw.includes("k"),
+    q: raw.includes("q"),
+  };
+}
+
+function normalizeEpSquare(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "-" || trimmed.length === 0) {
+    return "-";
+  }
+  return /^[a-h][1-8]$/.test(trimmed) ? trimmed : "-";
+}
+
+function boardToPlacement(board: string[][]): string {
+  const ranks: string[] = [];
+  for (const rank of board) {
+    let encoded = "";
+    let empties = 0;
+    for (const square of rank) {
+      if (!square) {
+        empties += 1;
+        continue;
+      }
+      if (empties > 0) {
+        encoded += String(empties);
+        empties = 0;
+      }
+      encoded += square;
+    }
+    if (empties > 0) {
+      encoded += String(empties);
+    }
+    ranks.push(encoded || "8");
+  }
+  return ranks.join("/");
+}
+
+function parseFenForEditor(fen: string): FenEditorState {
+  const fields = fen.trim().split(/\s+/);
+  if (fields.length < 4) {
+    throw new Error("Invalid FEN: expected at least 4 fields");
+  }
+
+  const rawRanks = fields[0].split("/");
+  if (rawRanks.length !== 8) {
+    throw new Error("Invalid FEN board: expected 8 ranks");
+  }
+
+  const board = emptyFenBoard();
+  for (let rankIndex = 0; rankIndex < 8; rankIndex += 1) {
+    const rank = rawRanks[rankIndex];
+    const squares: string[] = [];
+    for (const char of rank) {
+      if (/[1-8]/.test(char)) {
+        squares.push(...Array.from({ length: Number(char) }, () => ""));
+      } else if (/[prnbqkPRNBQK]/.test(char)) {
+        squares.push(char);
+      } else {
+        throw new Error(`Invalid FEN board character: ${char}`);
+      }
+    }
+    if (squares.length !== 8) {
+      throw new Error(`Invalid FEN board rank width at rank ${8 - rankIndex}`);
+    }
+    board[rankIndex] = squares;
+  }
+
+  const stm = fields[1] === "b" ? "b" : "w";
+  const castling = castlingStringToFlags(fields[2] && fields[2] !== "-" ? fields[2] : "");
+  const epSquare = normalizeEpSquare(fields[3] ?? "-");
+  const halfmoveRaw = Number.parseInt(fields[4] ?? "0", 10);
+  const fullmoveRaw = Number.parseInt(fields[5] ?? "1", 10);
+
+  return {
+    board,
+    stm,
+    castling,
+    epSquare,
+    halfmove: Number.isInteger(halfmoveRaw) && halfmoveRaw >= 0 ? halfmoveRaw : 0,
+    fullmove: Number.isInteger(fullmoveRaw) && fullmoveRaw >= 1 ? fullmoveRaw : 1,
+  };
+}
+
+function buildFenFromEditor(state: FenEditorState): string {
+  const placement = boardToPlacement(state.board);
+  const castling = castlingFlagsToString(state.castling);
+  const epSquare = normalizeEpSquare(state.epSquare);
+  const halfmove = Number.isInteger(state.halfmove) && state.halfmove >= 0 ? state.halfmove : 0;
+  const fullmove = Number.isInteger(state.fullmove) && state.fullmove >= 1 ? state.fullmove : 1;
+  return `${placement} ${state.stm} ${castling} ${epSquare} ${halfmove} ${fullmove}`;
+}
+
 export default function Home() {
   const [email, setEmail] = useState("player@example.com");
   const [password, setPassword] = useState("password123");
   const [user, setUser] = useState<User | null>(null);
   const [authMessage, setAuthMessage] = useState("Checking session...");
+  const [passwordResetEmail, setPasswordResetEmail] = useState("");
+  const [passwordResetToken, setPasswordResetToken] = useState("");
+  const [passwordResetNewPassword, setPasswordResetNewPassword] = useState("");
+  const [passwordResetStatus, setPasswordResetStatus] = useState(
+    "Use password reset if you lose access to your password"
+  );
 
   const [player, setPlayer] = useState("");
   const [eco, setEco] = useState("");
@@ -529,11 +691,23 @@ export default function Home() {
   const [annotationText, setAnnotationText] = useState("");
   const [annotationHighlightsInput, setAnnotationHighlightsInput] = useState("");
   const [annotationArrowsInput, setAnnotationArrowsInput] = useState("");
-  const [annotationSchemaVersion, setAnnotationSchemaVersion] = useState(1);
+  const [annotationSchemaVersion, setAnnotationSchemaVersion] = useState(2);
   const [currentMoveNote, setCurrentMoveNote] = useState("");
   const [currentMoveGlyphs, setCurrentMoveGlyphs] = useState("");
+  const [currentMoveVariationNote, setCurrentMoveVariationNote] = useState("");
+  const [currentMoveHighlightsInput, setCurrentMoveHighlightsInput] = useState("");
+  const [currentMoveArrowsInput, setCurrentMoveArrowsInput] = useState("");
   const [moveNotesByPly, setMoveNotesByPly] = useState<Record<string, unknown>>({});
   const [annotationStatus, setAnnotationStatus] = useState("No annotations loaded");
+  const [annotationAutosaveStatus, setAnnotationAutosaveStatus] = useState(
+    "No pending annotation changes"
+  );
+  const [annotationConflictStatus, setAnnotationConflictStatus] = useState("");
+  const [annotationDirty, setAnnotationDirty] = useState(false);
+  const [annotationUndoStack, setAnnotationUndoStack] = useState<AnnotationSnapshot[]>([]);
+  const [annotationRedoStack, setAnnotationRedoStack] = useState<AnnotationSnapshot[]>([]);
+  const annotationAutosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressAnnotationTrackingRef = useRef(false);
   const [engineLines, setEngineLines] = useState<EngineLine[]>([]);
   const [engineLineStatus, setEngineLineStatus] = useState("No saved engine lines");
 
@@ -560,6 +734,7 @@ export default function Home() {
   const [tagStatus, setTagStatus] = useState("Sign in to manage tags");
   const [collections, setCollections] = useState<CollectionItem[]>([]);
   const [newCollectionName, setNewCollectionName] = useState("");
+  const [newCollectionDescription, setNewCollectionDescription] = useState("");
   const [collectionStatus, setCollectionStatus] = useState("Sign in to manage collections");
 
   const [analysisFen, setAnalysisFen] = useState(
@@ -579,12 +754,38 @@ export default function Home() {
   const [positionSearchMode, setPositionSearchMode] = useState<"exact" | "material">(
     "exact"
   );
+  const [positionFenFilter, setPositionFenFilter] = useState("");
   const [positionMaterialKeyInput, setPositionMaterialKeyInput] = useState("");
   const [positionMaterialSideToMove, setPositionMaterialSideToMove] = useState("");
   const [positionSearchStatus, setPositionSearchStatus] = useState("Sign in to search positions");
   const [positionSearchResults, setPositionSearchResults] = useState<PositionSearchRow[]>([]);
+  const [fenEditorBoard, setFenEditorBoard] = useState<string[][]>(() => emptyFenBoard());
+  const [fenEditorSelectedPiece, setFenEditorSelectedPiece] = useState<string>("P");
+  const [fenEditorSideToMove, setFenEditorSideToMove] = useState<"w" | "b">("w");
+  const [fenEditorCastling, setFenEditorCastling] = useState<CastlingFlags>({
+    K: true,
+    Q: true,
+    k: true,
+    q: true,
+  });
+  const [fenEditorEpSquare, setFenEditorEpSquare] = useState("-");
+  const [fenEditorHalfmove, setFenEditorHalfmove] = useState(0);
+  const [fenEditorFullmove, setFenEditorFullmove] = useState(1);
+  const [fenEditorStatus, setFenEditorStatus] = useState(
+    "Use the board editor or raw FEN input for position search"
+  );
   const [openingTree, setOpeningTree] = useState<OpeningTreeNode | null>(null);
   const [openingTreeStatus, setOpeningTreeStatus] = useState("Open a position to load opening tree");
+  const [openingDepth, setOpeningDepth] = useState(2);
+  const [openingActiveFen, setOpeningActiveFen] = useState("");
+  const [openingPath, setOpeningPath] = useState<Array<{ fen: string; label: string }>>([]);
+
+  const [editingCollectionId, setEditingCollectionId] = useState<number | null>(null);
+  const [editingCollectionName, setEditingCollectionName] = useState("");
+  const [editingCollectionDescription, setEditingCollectionDescription] = useState("");
+  const [editingTagId, setEditingTagId] = useState<number | null>(null);
+  const [editingTagName, setEditingTagName] = useState("");
+  const [editingTagColor, setEditingTagColor] = useState("#4f8f6b");
 
   const pageCount = useMemo(() => {
     if (!games) {
@@ -605,6 +806,224 @@ export default function Home() {
   );
   const hasAnyGames = (games?.total ?? 0) > 0;
   const hasOpenedGame = selectedGame !== null;
+
+  function deepCloneMoveNotes(notes: Record<string, unknown>): Record<string, unknown> {
+    return JSON.parse(JSON.stringify(notes)) as Record<string, unknown>;
+  }
+
+  function captureAnnotationSnapshot(): AnnotationSnapshot {
+    return {
+      annotationText,
+      annotationHighlightsInput,
+      annotationArrowsInput,
+      currentMoveNote,
+      currentMoveGlyphs,
+      currentMoveVariationNote,
+      currentMoveHighlightsInput,
+      currentMoveArrowsInput,
+      moveNotesByPly: deepCloneMoveNotes(moveNotesByPly),
+    };
+  }
+
+  function applyAnnotationSnapshot(snapshot: AnnotationSnapshot): void {
+    suppressAnnotationTrackingRef.current = true;
+    setAnnotationText(snapshot.annotationText);
+    setAnnotationHighlightsInput(snapshot.annotationHighlightsInput);
+    setAnnotationArrowsInput(snapshot.annotationArrowsInput);
+    setCurrentMoveNote(snapshot.currentMoveNote);
+    setCurrentMoveGlyphs(snapshot.currentMoveGlyphs);
+    setCurrentMoveVariationNote(snapshot.currentMoveVariationNote);
+    setCurrentMoveHighlightsInput(snapshot.currentMoveHighlightsInput);
+    setCurrentMoveArrowsInput(snapshot.currentMoveArrowsInput);
+    setMoveNotesByPly(deepCloneMoveNotes(snapshot.moveNotesByPly));
+    queueMicrotask(() => {
+      suppressAnnotationTrackingRef.current = false;
+    });
+  }
+
+  function pushAnnotationUndoSnapshot(): void {
+    const snapshot = captureAnnotationSnapshot();
+    setAnnotationUndoStack((current) => [...current.slice(-49), snapshot]);
+    setAnnotationRedoStack([]);
+  }
+
+  function markAnnotationDirty(message = "Unsaved annotation changes"): void {
+    setAnnotationDirty(true);
+    setAnnotationAutosaveStatus(message);
+    setAnnotationConflictStatus("");
+  }
+
+  function updateAnnotationText(value: string): void {
+    if (value === annotationText) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setAnnotationText(value);
+    markAnnotationDirty();
+  }
+
+  function updateAnnotationHighlightsInput(value: string): void {
+    if (value === annotationHighlightsInput) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setAnnotationHighlightsInput(value);
+    markAnnotationDirty();
+  }
+
+  function updateAnnotationArrowsInput(value: string): void {
+    if (value === annotationArrowsInput) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setAnnotationArrowsInput(value);
+    markAnnotationDirty();
+  }
+
+  function updateCurrentMoveNote(value: string): void {
+    if (value === currentMoveNote) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setCurrentMoveNote(value);
+    markAnnotationDirty("Unsaved move-note changes");
+  }
+
+  function updateCurrentMoveGlyphs(value: string): void {
+    if (value === currentMoveGlyphs) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setCurrentMoveGlyphs(value);
+    markAnnotationDirty("Unsaved move-note changes");
+  }
+
+  function updateCurrentMoveVariationNote(value: string): void {
+    if (value === currentMoveVariationNote) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setCurrentMoveVariationNote(value);
+    markAnnotationDirty("Unsaved move-note changes");
+  }
+
+  function updateCurrentMoveHighlightsInput(value: string): void {
+    if (value === currentMoveHighlightsInput) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setCurrentMoveHighlightsInput(value);
+    markAnnotationDirty("Unsaved move-note changes");
+  }
+
+  function updateCurrentMoveArrowsInput(value: string): void {
+    if (value === currentMoveArrowsInput) {
+      return;
+    }
+    pushAnnotationUndoSnapshot();
+    setCurrentMoveArrowsInput(value);
+    markAnnotationDirty("Unsaved move-note changes");
+  }
+
+  function undoAnnotationEdit(): void {
+    if (annotationUndoStack.length === 0) {
+      return;
+    }
+    const currentSnapshot = captureAnnotationSnapshot();
+    const previous = annotationUndoStack[annotationUndoStack.length - 1];
+    setAnnotationUndoStack((current) => current.slice(0, -1));
+    setAnnotationRedoStack((current) => [...current, currentSnapshot]);
+    applyAnnotationSnapshot(previous);
+    markAnnotationDirty("Undid annotation edit (unsaved)");
+  }
+
+  function redoAnnotationEdit(): void {
+    if (annotationRedoStack.length === 0) {
+      return;
+    }
+    const currentSnapshot = captureAnnotationSnapshot();
+    const next = annotationRedoStack[annotationRedoStack.length - 1];
+    setAnnotationRedoStack((current) => current.slice(0, -1));
+    setAnnotationUndoStack((current) => [...current.slice(-49), currentSnapshot]);
+    applyAnnotationSnapshot(next);
+    markAnnotationDirty("Redid annotation edit (unsaved)");
+  }
+
+  function clearAnnotationHistory(): void {
+    setAnnotationUndoStack([]);
+    setAnnotationRedoStack([]);
+  }
+
+  function applyFenEditorState(state: FenEditorState): void {
+    setFenEditorBoard(cloneFenBoard(state.board));
+    setFenEditorSideToMove(state.stm);
+    setFenEditorCastling(state.castling);
+    setFenEditorEpSquare(state.epSquare);
+    setFenEditorHalfmove(state.halfmove);
+    setFenEditorFullmove(state.fullmove);
+  }
+
+  function loadFenIntoEditor(rawFen: string): void {
+    try {
+      const parsedFen = parseFenForEditor(rawFen);
+      applyFenEditorState(parsedFen);
+      setFenEditorStatus("Loaded FEN into board editor");
+    } catch (error) {
+      setFenEditorStatus(`Failed to parse FEN: ${String(error)}`);
+    }
+  }
+
+  function editorStateToFen(): string {
+    return buildFenFromEditor({
+      board: fenEditorBoard,
+      stm: fenEditorSideToMove,
+      castling: fenEditorCastling,
+      epSquare: fenEditorEpSquare,
+      halfmove: fenEditorHalfmove,
+      fullmove: fenEditorFullmove,
+    });
+  }
+
+  function setFenEditorSquare(rankIndex: number, fileIndex: number, piece: string): void {
+    setFenEditorBoard((current) => {
+      const next = cloneFenBoard(current);
+      next[rankIndex][fileIndex] = piece;
+      return next;
+    });
+  }
+
+  function toggleFenEditorCastling(flag: keyof CastlingFlags): void {
+    setFenEditorCastling((current) => ({
+      ...current,
+      [flag]: !current[flag],
+    }));
+  }
+
+  function resetFenEditorToStartPosition(): void {
+    loadFenIntoEditor("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  }
+
+  function clearFenEditorBoard(): void {
+    applyFenEditorState({
+      board: emptyFenBoard(),
+      stm: "w",
+      castling: { K: false, Q: false, k: false, q: false },
+      epSquare: "-",
+      halfmove: 0,
+      fullmove: 1,
+    });
+    setFenEditorStatus("Cleared board editor");
+  }
+
+  function applyEditorFenToSearchInput(): void {
+    try {
+      const fen = editorStateToFen();
+      setPositionSearchInput(fen);
+      setFenEditorStatus("Applied editor position to FEN input");
+    } catch (error) {
+      setFenEditorStatus(`Failed to build FEN: ${String(error)}`);
+    }
+  }
 
   function rememberViewedGame(game: GameDetail): void {
     const entry: RecentlyViewedGame = {
@@ -657,6 +1076,7 @@ export default function Home() {
     setSavedFilters([]);
     setTags([]);
     setCollections([]);
+    setNewCollectionDescription("");
     setSelectedGame(null);
     setSelectedGameId(null);
     setNotationLines([]);
@@ -667,20 +1087,42 @@ export default function Home() {
     setAnnotationText("");
     setAnnotationHighlightsInput("");
     setAnnotationArrowsInput("");
-    setAnnotationSchemaVersion(1);
+    setAnnotationSchemaVersion(2);
     setMoveNotesByPly({});
     setCurrentMoveNote("");
     setCurrentMoveGlyphs("");
+    setCurrentMoveVariationNote("");
+    setCurrentMoveHighlightsInput("");
+    setCurrentMoveArrowsInput("");
+    setAnnotationAutosaveStatus("No pending annotation changes");
+    setAnnotationConflictStatus("");
+    setAnnotationDirty(false);
+    clearAnnotationHistory();
     setEngineLines([]);
     setPositionSearchResults([]);
     setPositionSearchMode("exact");
+    setPositionFenFilter("");
     setPositionMaterialKeyInput("");
     setPositionMaterialSideToMove("");
+    resetFenEditorToStartPosition();
+    setFenEditorStatus("Use the board editor or raw FEN input for position search");
     setOpeningTree(null);
+    setOpeningDepth(2);
+    setOpeningActiveFen("");
+    setOpeningPath([]);
+    setEditingCollectionId(null);
+    setEditingCollectionName("");
+    setEditingCollectionDescription("");
+    setEditingTagId(null);
+    setEditingTagName("");
+    setEditingTagColor("#4f8f6b");
     setAuthMessage("Not signed in");
   }
 
-  async function refreshGames(nextPage = page): Promise<void> {
+  async function refreshGames(
+    nextPage = page,
+    options: { positionFenOverride?: string } = {}
+  ): Promise<void> {
     if (!user) {
       setGames(null);
       setTableStatus("Sign in to load games");
@@ -709,6 +1151,7 @@ export default function Home() {
       avgEloMax,
       collectionId: collectionFilterId || undefined,
       tagId: tagFilterId || undefined,
+      positionFen: (options.positionFenOverride ?? positionFenFilter) || undefined,
     });
 
     setTableStatus("Loading games...");
@@ -792,27 +1235,52 @@ export default function Home() {
         lines.find((line) => line.id === savedLineId) ?? defaultLine;
 
       applyNotationLine(game.startingFen, savedLine, savedCursor);
-      setAnnotationText(typeof comment === "string" ? comment : "");
-      setAnnotationHighlightsInput(asAnnotationInput(saved.highlights));
-      setAnnotationArrowsInput(asAnnotationInput(saved.arrows));
-      setAnnotationSchemaVersion(annotations.data.schemaVersion ?? 1);
-      setMoveNotesByPly(annotations.data.moveNotes ?? {});
+      applyAnnotationSnapshot({
+        annotationText: typeof comment === "string" ? comment : "",
+        annotationHighlightsInput: asAnnotationInput(saved.highlights),
+        annotationArrowsInput: asAnnotationInput(saved.arrows),
+        currentMoveNote: "",
+        currentMoveGlyphs: "",
+        currentMoveVariationNote: "",
+        currentMoveHighlightsInput: "",
+        currentMoveArrowsInput: "",
+        moveNotesByPly: deepCloneMoveNotes(annotations.data.moveNotes ?? {}),
+      });
+      setAnnotationSchemaVersion(Math.max(2, annotations.data.schemaVersion ?? 2));
+      setAnnotationAutosaveStatus("No pending annotation changes");
+      setAnnotationConflictStatus("");
+      setAnnotationDirty(false);
+      clearAnnotationHistory();
       setAnnotationStatus("Annotations loaded");
     } else {
-      setAnnotationText("");
-      setAnnotationHighlightsInput("");
-      setAnnotationArrowsInput("");
-      setAnnotationSchemaVersion(1);
-      setMoveNotesByPly({});
+      applyAnnotationSnapshot({
+        annotationText: "",
+        annotationHighlightsInput: "",
+        annotationArrowsInput: "",
+        currentMoveNote: "",
+        currentMoveGlyphs: "",
+        currentMoveVariationNote: "",
+        currentMoveHighlightsInput: "",
+        currentMoveArrowsInput: "",
+        moveNotesByPly: {},
+      });
+      setAnnotationSchemaVersion(2);
+      setAnnotationAutosaveStatus("No pending annotation changes");
+      setAnnotationConflictStatus("");
+      setAnnotationDirty(false);
+      clearAnnotationHistory();
       setAnnotationStatus("No annotations found");
     }
 
     await refreshEngineLines(gameId);
   }
 
-  async function saveAnnotations(): Promise<void> {
+  async function saveAnnotations(options: { fromAutosave?: boolean } = {}): Promise<void> {
     if (!selectedGameId) {
       return;
+    }
+    if (options.fromAutosave) {
+      setAnnotationAutosaveStatus("Autosaving...");
     }
 
     const response = await fetchJson<{ gameId: number }>(
@@ -834,12 +1302,27 @@ export default function Home() {
     );
 
     if (response.status !== 200) {
+      if (response.status === 409) {
+        setAnnotationConflictStatus(
+          "Save conflict detected. Reload game annotations and reapply your latest changes."
+        );
+      }
       setAnnotationStatus(
         `Failed to save annotations${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
       );
+      if (options.fromAutosave) {
+        setAnnotationAutosaveStatus("Autosave failed");
+      }
       return;
     }
 
+    setAnnotationDirty(false);
+    setAnnotationConflictStatus("");
+    setAnnotationAutosaveStatus(
+      options.fromAutosave
+        ? `Autosaved at ${new Date().toLocaleTimeString()}`
+        : `Saved at ${new Date().toLocaleTimeString()}`
+    );
     setAnnotationStatus("Annotations saved");
   }
 
@@ -1062,6 +1545,64 @@ export default function Home() {
     await refreshTags();
   }
 
+  function startEditingTag(tag: TagItem): void {
+    setEditingTagId(tag.id);
+    setEditingTagName(tag.name);
+    setEditingTagColor(tag.color ?? "#4f8f6b");
+  }
+
+  function cancelEditingTag(): void {
+    setEditingTagId(null);
+    setEditingTagName("");
+    setEditingTagColor("#4f8f6b");
+  }
+
+  async function saveTagEdits(tagId: number): Promise<void> {
+    if (!user || !editingTagName.trim()) {
+      return;
+    }
+    const response = await fetchJson<{ id: number }>(`/api/tags/${tagId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name: editingTagName.trim(),
+        color: editingTagColor,
+      }),
+    });
+    if (response.status !== 200) {
+      setTagStatus(
+        `Failed to update tag${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    cancelEditingTag();
+    setTagStatus("Tag updated");
+    await Promise.all([refreshTags(), refreshGames(page)]);
+  }
+
+  async function deleteTagItem(tag: TagItem): Promise<void> {
+    if (!user) {
+      return;
+    }
+    const response = await fetchJson<{ error?: string }>(`/api/tags/${tag.id}`, {
+      method: "DELETE",
+    });
+    if (response.status !== 204) {
+      setTagStatus(
+        `Failed to delete tag${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    if (tagFilterId === String(tag.id)) {
+      setTagFilterId("");
+      void refreshGames(1);
+    }
+    setTagStatus(`Deleted tag "${tag.name}"`);
+    if (editingTagId === tag.id) {
+      cancelEditingTag();
+    }
+    await Promise.all([refreshTags(), refreshGames(page)]);
+  }
+
   async function createCollection(): Promise<void> {
     if (!user || !newCollectionName.trim()) {
       return;
@@ -1070,6 +1611,10 @@ export default function Home() {
       method: "POST",
       body: JSON.stringify({
         name: newCollectionName.trim(),
+        description:
+          newCollectionDescription.trim().length > 0
+            ? newCollectionDescription.trim()
+            : undefined,
       }),
     });
     if (response.status !== 201) {
@@ -1079,6 +1624,68 @@ export default function Home() {
       return;
     }
     setNewCollectionName("");
+    setNewCollectionDescription("");
+    await refreshCollections();
+  }
+
+  function startEditingCollection(collection: CollectionItem): void {
+    setEditingCollectionId(collection.id);
+    setEditingCollectionName(collection.name);
+    setEditingCollectionDescription(collection.description ?? "");
+  }
+
+  function cancelEditingCollection(): void {
+    setEditingCollectionId(null);
+    setEditingCollectionName("");
+    setEditingCollectionDescription("");
+  }
+
+  async function saveCollectionEdits(collectionId: number): Promise<void> {
+    if (!user || !editingCollectionName.trim()) {
+      return;
+    }
+    const response = await fetchJson<{ id: number }>(`/api/collections/${collectionId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name: editingCollectionName.trim(),
+        description:
+          editingCollectionDescription.trim().length > 0
+            ? editingCollectionDescription.trim()
+            : null,
+      }),
+    });
+    if (response.status !== 200) {
+      setCollectionStatus(
+        `Failed to update collection${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    cancelEditingCollection();
+    setCollectionStatus("Collection updated");
+    await refreshCollections();
+  }
+
+  async function deleteCollectionItem(collection: CollectionItem): Promise<void> {
+    if (!user) {
+      return;
+    }
+    const response = await fetchJson<{ error?: string }>(`/api/collections/${collection.id}`, {
+      method: "DELETE",
+    });
+    if (response.status !== 204) {
+      setCollectionStatus(
+        `Failed to delete collection${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    if (collectionFilterId === String(collection.id)) {
+      setCollectionFilterId("");
+      void refreshGames(1);
+    }
+    setCollectionStatus(`Deleted collection "${collection.name}"`);
+    if (editingCollectionId === collection.id) {
+      cancelEditingCollection();
+    }
     await refreshCollections();
   }
 
@@ -1245,14 +1852,17 @@ export default function Home() {
     }
   }
 
-  async function loadOpeningTree(fen: string): Promise<void> {
+  async function loadOpeningTree(
+    fen: string,
+    options: { depth?: number; path?: Array<{ fen: string; label: string }> } = {}
+  ): Promise<void> {
     if (!user) {
       return;
     }
     setOpeningTreeStatus("Loading opening tree...");
     const query = toQuery({
       fen,
-      depth: 2,
+      depth: options.depth ?? openingDepth,
     });
     const response = await fetchJson<OpeningTreeResponse>(`/api/openings/tree${query}`, {
       method: "GET",
@@ -1264,13 +1874,47 @@ export default function Home() {
       return;
     }
     setOpeningTree(response.data.tree);
-    setOpeningTreeStatus("Opening tree loaded");
+    setOpeningActiveFen(response.data.fenNorm);
+    if (options.path) {
+      setOpeningPath(options.path);
+    } else {
+      setOpeningPath([{ fen: response.data.fenNorm, label: "Root" }]);
+    }
+    setOpeningTreeStatus(
+      `Opening tree loaded at depth ${response.data.depth} (${response.data.tree.moves.length} move(s))`
+    );
   }
 
-  async function diveOpeningMove(nextFen: string): Promise<void> {
+  async function filterGamesByOpeningNode(fen: string): Promise<void> {
+    setPositionFenFilter(fen);
+    setPage(1);
+    await refreshGames(1, { positionFenOverride: fen });
+  }
+
+  async function diveOpeningMove(nextFen: string, moveUci: string): Promise<void> {
+    const nextPath = [...openingPath, { fen: nextFen, label: moveUci }];
     setPositionSearchInput(nextFen);
     jumpViewerToFen(nextFen);
-    await Promise.all([loadOpeningTree(nextFen), searchPositionExact(nextFen)]);
+    await Promise.all([
+      loadOpeningTree(nextFen, { path: nextPath }),
+      searchPositionExact(nextFen),
+      filterGamesByOpeningNode(nextFen),
+    ]);
+  }
+
+  async function jumpToOpeningPath(index: number): Promise<void> {
+    const entry = openingPath[index];
+    if (!entry) {
+      return;
+    }
+    const truncated = openingPath.slice(0, index + 1);
+    setPositionSearchInput(entry.fen);
+    jumpViewerToFen(entry.fen);
+    await Promise.all([
+      loadOpeningTree(entry.fen, { path: truncated }),
+      searchPositionExact(entry.fen),
+      filterGamesByOpeningNode(entry.fen),
+    ]);
   }
 
   async function enqueueBackfill(): Promise<void> {
@@ -1306,6 +1950,61 @@ export default function Home() {
       refreshTags(),
       refreshCollections(),
     ]);
+  }
+
+  async function requestPasswordReset(): Promise<void> {
+    if (!passwordResetEmail.trim()) {
+      setPasswordResetStatus("Enter an email to request a reset token");
+      return;
+    }
+
+    const response = await fetchJson<{ ok: boolean; resetToken?: string }>(
+      "/api/auth/password-reset/request",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          email: passwordResetEmail.trim(),
+        }),
+      }
+    );
+
+    if (response.status !== 200) {
+      setPasswordResetStatus(
+        `Password reset request failed${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+
+    if ("resetToken" in response.data && typeof response.data.resetToken === "string") {
+      setPasswordResetToken(response.data.resetToken);
+      setPasswordResetStatus("Reset token generated (non-production mode)");
+      return;
+    }
+    setPasswordResetStatus("If that email exists, a reset message has been sent");
+  }
+
+  async function confirmPasswordReset(): Promise<void> {
+    if (!passwordResetToken.trim() || !passwordResetNewPassword.trim()) {
+      setPasswordResetStatus("Provide both reset token and new password");
+      return;
+    }
+
+    const response = await fetchJson<{ ok: boolean }>("/api/auth/password-reset/confirm", {
+      method: "POST",
+      body: JSON.stringify({
+        token: passwordResetToken.trim(),
+        newPassword: passwordResetNewPassword,
+      }),
+    });
+
+    if (response.status !== 200) {
+      setPasswordResetStatus(
+        `Password reset confirm failed${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setPasswordResetStatus("Password reset successful. You can now log in with the new password.");
+    setPassword(passwordResetNewPassword);
   }
 
   async function logout(): Promise<void> {
@@ -1440,6 +2139,7 @@ export default function Home() {
           avgEloMax,
           collectionId: collectionFilterId,
           tagId: tagFilterId,
+          positionFen: positionFenFilter,
           sort,
         },
       }),
@@ -1731,20 +2431,50 @@ export default function Home() {
   }
 
   function saveCurrentMoveNoteToState(): void {
+    pushAnnotationUndoSnapshot();
     const key = String(cursor);
-    setMoveNotesByPly((current) => ({
-      ...current,
-      [key]: {
-        comment: currentMoveNote,
-        glyphs: currentMoveGlyphs
-          .split(",")
-          .map((part) => part.trim())
-          .filter((part) => part.length > 0)
-          .map((part) => Number(part))
-          .filter((value) => Number.isInteger(value) && value > 0),
-      },
-    }));
-    setAnnotationStatus(`Staged move note for ply ${cursor}. Save annotations to persist.`);
+    const comment = currentMoveNote.trim();
+    const variationNote = currentMoveVariationNote.trim();
+    const nags = currentMoveGlyphs
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .map((part) => Number(part))
+      .filter((value) => Number.isInteger(value) && value > 0);
+    const highlights = parseAnnotationStringList(currentMoveHighlightsInput);
+    const arrows = parseAnnotationStringList(currentMoveArrowsInput);
+
+    const hasAnyField =
+      comment.length > 0 ||
+      variationNote.length > 0 ||
+      nags.length > 0 ||
+      highlights.length > 0 ||
+      arrows.length > 0;
+
+    setMoveNotesByPly((current) => {
+      const next = {
+        ...current,
+      };
+      if (!hasAnyField) {
+        delete next[key];
+        return next;
+      }
+      next[key] = {
+        comment,
+        nags,
+        glyphs: nags,
+        highlights,
+        arrows,
+        variationNote,
+      };
+      return next;
+    });
+    markAnnotationDirty(`Staged move note for ply ${cursor}`);
+    setAnnotationStatus(
+      hasAnyField
+        ? `Staged move note for ply ${cursor}. Save annotations to persist.`
+        : `Cleared move note for ply ${cursor}. Save annotations to persist.`
+    );
   }
 
   async function saveActiveAnalysisLine(): Promise<void> {
@@ -1824,6 +2554,7 @@ export default function Home() {
     setAvgEloMax(String(query.avgEloMax ?? ""));
     setCollectionFilterId(String(query.collectionId ?? ""));
     setTagFilterId(String(query.tagId ?? ""));
+    setPositionFenFilter(String(query.positionFen ?? ""));
     setSort(String(query.sort ?? "date_desc"));
     setPage(1);
     void refreshGames(1);
@@ -1838,6 +2569,7 @@ export default function Home() {
   useEffect(() => {
     void refreshSession();
     void refreshFilterPresets();
+    loadFenIntoEditor(positionSearchInput);
     if (typeof window !== "undefined") {
       const raw = window.localStorage.getItem("chessdb_recent_games");
       if (raw) {
@@ -1891,6 +2623,21 @@ export default function Home() {
   useEffect(() => {
     void refreshGames(page);
   }, [sort, page]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    setPage(1);
+    void refreshGames(1);
+  }, [positionFenFilter, user]);
+
+  useEffect(() => {
+    if (!user || !openingActiveFen) {
+      return;
+    }
+    void loadOpeningTree(openingActiveFen, { depth: openingDepth, path: openingPath });
+  }, [openingDepth]);
 
   useEffect(() => {
     if (!user) {
@@ -1951,6 +2698,21 @@ export default function Home() {
         return;
       }
 
+      const lowerKey = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && lowerKey === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undoAnnotationEdit();
+        return;
+      }
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        (lowerKey === "y" || (lowerKey === "z" && event.shiftKey))
+      ) {
+        event.preventDefault();
+        redoAnnotationEdit();
+        return;
+      }
+
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         setCursor((value) => Math.max(0, value - 1));
@@ -1990,18 +2752,65 @@ export default function Home() {
 
   useEffect(() => {
     const note = moveNotesByPly[String(cursor)] as
-      | { comment?: unknown; glyphs?: unknown }
+      | {
+          comment?: unknown;
+          nags?: unknown;
+          glyphs?: unknown;
+          variationNote?: unknown;
+          highlights?: unknown;
+          arrows?: unknown;
+        }
       | undefined;
+    const glyphs = Array.isArray(note?.nags)
+      ? note.nags
+      : Array.isArray(note?.glyphs)
+        ? note.glyphs
+        : [];
     setCurrentMoveNote(typeof note?.comment === "string" ? note.comment : "");
-    setCurrentMoveGlyphs(
-      Array.isArray(note?.glyphs)
-        ? note!.glyphs
-            .map((glyph) => (typeof glyph === "number" ? String(glyph) : ""))
-            .filter((glyph) => glyph.length > 0)
-            .join(", ")
-        : ""
+    setCurrentMoveVariationNote(
+      typeof note?.variationNote === "string" ? note.variationNote : ""
     );
+    setCurrentMoveGlyphs(
+      glyphs
+        .map((glyph) => (typeof glyph === "number" ? String(glyph) : ""))
+        .filter((glyph) => glyph.length > 0)
+        .join(", ")
+    );
+    setCurrentMoveHighlightsInput(asAnnotationInput(note?.highlights));
+    setCurrentMoveArrowsInput(asAnnotationInput(note?.arrows));
   }, [cursor, moveNotesByPly]);
+
+  useEffect(() => {
+    if (
+      !user ||
+      !selectedGameId ||
+      !annotationDirty ||
+      suppressAnnotationTrackingRef.current
+    ) {
+      return;
+    }
+
+    setAnnotationAutosaveStatus("Autosave pending...");
+    const timer = setTimeout(() => {
+      void saveAnnotations({ fromAutosave: true });
+    }, 1200);
+    annotationAutosaveTimerRef.current = timer;
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    user,
+    selectedGameId,
+    annotationDirty,
+    annotationText,
+    annotationHighlightsInput,
+    annotationArrowsInput,
+    moveNotesByPly,
+    cursor,
+    activeLineId,
+    annotationSchemaVersion,
+  ]);
 
   useEffect(() => {
     if (!selectedGameId || !user) {
@@ -2012,6 +2821,9 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
+      if (annotationAutosaveTimerRef.current) {
+        clearTimeout(annotationAutosaveTimerRef.current);
+      }
       if (analysisStreamRef.current) {
         analysisStreamRef.current.close();
       }
@@ -2029,6 +2841,7 @@ export default function Home() {
         <h2>Account</h2>
         <form
           className="auth-grid"
+          data-testid="auth-form"
           onSubmit={(event) => {
             event.preventDefault();
             void submitAuth("login");
@@ -2039,6 +2852,7 @@ export default function Home() {
             <input
               type="email"
               value={email}
+              data-testid="auth-email"
               onChange={(event) => setEmail(event.target.value)}
               required
             />
@@ -2048,18 +2862,67 @@ export default function Home() {
             <input
               type="password"
               value={password}
+              data-testid="auth-password"
               onChange={(event) => setPassword(event.target.value)}
               required
               minLength={8}
             />
           </label>
           <div className="button-row">
-            <button type="button" onClick={() => void submitAuth("register")}>Register</button>
-            <button type="submit">Login</button>
-            <button type="button" onClick={() => void logout()}>Logout</button>
+            <button type="button" data-testid="auth-register" onClick={() => void submitAuth("register")}>Register</button>
+            <button type="submit" data-testid="auth-login">Login</button>
+            <button type="button" data-testid="auth-logout" onClick={() => void logout()}>Logout</button>
           </div>
         </form>
-        <p className="muted">{authMessage}</p>
+        <p className="muted" data-testid="auth-status">{authMessage}</p>
+        <div className="auth-grid">
+          <label>
+            Password Reset Email
+            <input
+              type="email"
+              data-testid="reset-email"
+              placeholder="you@example.com"
+              value={passwordResetEmail}
+              onChange={(event) => setPasswordResetEmail(event.target.value)}
+            />
+          </label>
+          <label>
+            Reset Token
+            <input
+              data-testid="reset-token"
+              placeholder="Paste token from email"
+              value={passwordResetToken}
+              onChange={(event) => setPasswordResetToken(event.target.value)}
+            />
+          </label>
+          <label>
+            New Password
+            <input
+              type="password"
+              data-testid="reset-new-password"
+              minLength={8}
+              value={passwordResetNewPassword}
+              onChange={(event) => setPasswordResetNewPassword(event.target.value)}
+            />
+          </label>
+          <div className="button-row">
+            <button
+              type="button"
+              data-testid="reset-request"
+              onClick={() => void requestPasswordReset()}
+            >
+              Request Reset
+            </button>
+            <button
+              type="button"
+              data-testid="reset-confirm"
+              onClick={() => void confirmPasswordReset()}
+            >
+              Confirm Reset
+            </button>
+          </div>
+        </div>
+        <p className="muted" data-testid="reset-status">{passwordResetStatus}</p>
       </section>
 
       <section className="card">
@@ -2070,10 +2933,10 @@ export default function Home() {
           <li>{hasOpenedGame ? "Done" : "Pending"}: Open a game and start analysis/annotation.</li>
         </ol>
         <div className="button-row">
-          <button onClick={() => void createSampleImport()} disabled={!user}>
+          <button data-testid="seed-import-sample" onClick={() => void createSampleImport()} disabled={!user}>
             Import Sample PGN
           </button>
-          <button onClick={() => void createSampleGame()} disabled={!user}>
+          <button data-testid="seed-insert-sample-game" onClick={() => void createSampleGame()} disabled={!user}>
             Insert Sample Game
           </button>
           <button onClick={() => void enqueueBackfill()} disabled={!user}>
@@ -2192,6 +3055,19 @@ export default function Home() {
         </form>
 
         <p className="muted">{tableStatus}</p>
+        {positionFenFilter ? (
+          <div className="button-row">
+            <span className="muted">Position filter active: {positionFenFilter}</span>
+            <button
+              onClick={() => {
+                setPositionFenFilter("");
+                void refreshGames(1, { positionFenOverride: "" });
+              }}
+            >
+              Clear Position Filter
+            </button>
+          </div>
+        ) : null}
         <div className="button-row">
           <span>{selectedGameIds.length} selected</span>
           {collections.length > 0 ? (
@@ -2383,7 +3259,7 @@ export default function Home() {
           </div>
         </div>
 
-        <p className="muted">{viewerStatus}</p>
+        <p className="muted" data-testid="viewer-status">{viewerStatus}</p>
         {recentlyViewedGames.length > 0 ? (
           <div className="saved-filters">
             {recentlyViewedGames.map((entry) => (
@@ -2441,41 +3317,74 @@ export default function Home() {
                 <textarea
                   rows={4}
                   value={annotationText}
-                  onChange={(event) => setAnnotationText(event.target.value)}
+                  onChange={(event) => updateAnnotationText(event.target.value)}
                 />
               </label>
               <label>
                 Highlight Squares (comma-separated, e.g. e4, d5)
                 <input
                   value={annotationHighlightsInput}
-                  onChange={(event) => setAnnotationHighlightsInput(event.target.value)}
+                  onChange={(event) => updateAnnotationHighlightsInput(event.target.value)}
                 />
               </label>
               <label>
                 Arrows (comma-separated, e.g. e2e4, g1f3)
                 <input
                   value={annotationArrowsInput}
-                  onChange={(event) => setAnnotationArrowsInput(event.target.value)}
+                  onChange={(event) => updateAnnotationArrowsInput(event.target.value)}
                 />
               </label>
               <label>
                 Move Note (current ply)
                 <input
                   value={currentMoveNote}
-                  onChange={(event) => setCurrentMoveNote(event.target.value)}
+                  onChange={(event) => updateCurrentMoveNote(event.target.value)}
                 />
               </label>
               <label>
                 Move Glyphs (NAG numbers, comma-separated)
                 <input
                   value={currentMoveGlyphs}
-                  onChange={(event) => setCurrentMoveGlyphs(event.target.value)}
+                  onChange={(event) => updateCurrentMoveGlyphs(event.target.value)}
+                />
+              </label>
+              <label>
+                Move Highlights (comma-separated)
+                <input
+                  value={currentMoveHighlightsInput}
+                  onChange={(event) => updateCurrentMoveHighlightsInput(event.target.value)}
+                />
+              </label>
+              <label>
+                Move Arrows (comma-separated)
+                <input
+                  value={currentMoveArrowsInput}
+                  onChange={(event) => updateCurrentMoveArrowsInput(event.target.value)}
+                />
+              </label>
+              <label>
+                Variation Note (optional)
+                <input
+                  value={currentMoveVariationNote}
+                  onChange={(event) => updateCurrentMoveVariationNote(event.target.value)}
                 />
               </label>
               {annotationArrows.length > 0 ? (
                 <p className="muted">Arrows: {annotationArrows.join(", ")}</p>
               ) : null}
               <div className="button-row">
+                <button
+                  onClick={() => undoAnnotationEdit()}
+                  disabled={!selectedGameId || annotationUndoStack.length === 0}
+                >
+                  Undo
+                </button>
+                <button
+                  onClick={() => redoAnnotationEdit()}
+                  disabled={!selectedGameId || annotationRedoStack.length === 0}
+                >
+                  Redo
+                </button>
                 <button onClick={() => saveCurrentMoveNoteToState()} disabled={!selectedGameId}>
                   Stage Move Note
                 </button>
@@ -2487,6 +3396,11 @@ export default function Home() {
                 </button>
               </div>
               <p className="muted">{annotationStatus}</p>
+              <p className="muted">
+                {annotationAutosaveStatus}
+                {annotationDirty ? " (unsaved)" : ""}
+              </p>
+              {annotationConflictStatus ? <p className="muted">{annotationConflictStatus}</p> : null}
               <p className="muted">{engineLineStatus}</p>
             </div>
 
@@ -2576,7 +3490,7 @@ export default function Home() {
           </div>
         </div>
 
-        <p className="muted">{importStatus}</p>
+        <p className="muted" data-testid="import-status">{importStatus}</p>
         <div className="table-wrap">
           <table>
             <thead>
@@ -2786,6 +3700,7 @@ export default function Home() {
               onClick={() => {
                 if (currentFen) {
                   setPositionSearchInput(currentFen);
+                  loadFenIntoEditor(currentFen);
                 }
               }}
               disabled={!user || !currentFen}
@@ -2812,7 +3727,10 @@ export default function Home() {
             FEN
             <input
               value={positionSearchInput}
-              onChange={(event) => setPositionSearchInput(event.target.value)}
+              onChange={(event) => {
+                setPositionSearchInput(event.target.value);
+                setFenEditorStatus("FEN input updated");
+              }}
               disabled={!user}
             />
           </label>
@@ -2841,6 +3759,149 @@ export default function Home() {
               </select>
             </label>
           ) : null}
+        </div>
+        <div className="fen-editor-grid">
+          <div className="fen-editor-board">
+            {fenEditorBoard.map((rank, rankIndex) => (
+              <div key={`editor-rank-${rankIndex}`} className="board-rank">
+                {rank.map((piece, fileIndex) => {
+                  const square = `${"abcdefgh"[fileIndex]}${8 - rankIndex}`;
+                  return (
+                    <button
+                      type="button"
+                      key={`editor-square-${rankIndex}-${fileIndex}`}
+                      className={`square ${(rankIndex + fileIndex) % 2 === 0 ? "light" : "dark"} editor-square`}
+                      title={square}
+                      onClick={() => setFenEditorSquare(rankIndex, fileIndex, fenEditorSelectedPiece)}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const dropped = event.dataTransfer.getData("text/plain");
+                        const nextPiece = FEN_EDITOR_PIECES.includes(dropped as (typeof FEN_EDITOR_PIECES)[number])
+                          ? dropped
+                          : fenEditorSelectedPiece;
+                        setFenEditorSquare(rankIndex, fileIndex, nextPiece);
+                      }}
+                    >
+                      {pieceToSymbol(piece)}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          <div className="fen-editor-controls">
+            <p className="muted">Piece Palette (click or drag onto board)</p>
+            <div className="fen-palette">
+              {FEN_EDITOR_PIECES.map((piece) => (
+                <button
+                  type="button"
+                  key={`piece-${piece || "clear"}`}
+                  className={fenEditorSelectedPiece === piece ? "palette-item active" : "palette-item"}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("text/plain", piece);
+                  }}
+                  onClick={() => setFenEditorSelectedPiece(piece)}
+                >
+                  <span>{piece ? pieceToSymbol(piece) : "⌫"}</span>
+                  <small>{piece || "Clear"}</small>
+                </button>
+              ))}
+            </div>
+            <div className="analysis-grid">
+              <label>
+                Side to Move
+                <select
+                  value={fenEditorSideToMove}
+                  onChange={(event) =>
+                    setFenEditorSideToMove(event.target.value === "b" ? "b" : "w")
+                  }
+                >
+                  <option value="w">White</option>
+                  <option value="b">Black</option>
+                </select>
+              </label>
+              <label>
+                En Passant
+                <input
+                  value={fenEditorEpSquare}
+                  onChange={(event) => setFenEditorEpSquare(event.target.value)}
+                  placeholder="-"
+                />
+              </label>
+              <label>
+                Halfmove Clock
+                <input
+                  type="number"
+                  min={0}
+                  value={fenEditorHalfmove}
+                  onChange={(event) => setFenEditorHalfmove(Number(event.target.value))}
+                />
+              </label>
+              <label>
+                Fullmove Number
+                <input
+                  type="number"
+                  min={1}
+                  value={fenEditorFullmove}
+                  onChange={(event) =>
+                    setFenEditorFullmove(Math.max(1, Number(event.target.value)))
+                  }
+                />
+              </label>
+            </div>
+            <div className="button-row">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={fenEditorCastling.K}
+                  onChange={() => toggleFenEditorCastling("K")}
+                />
+                K
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={fenEditorCastling.Q}
+                  onChange={() => toggleFenEditorCastling("Q")}
+                />
+                Q
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={fenEditorCastling.k}
+                  onChange={() => toggleFenEditorCastling("k")}
+                />
+                k
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={fenEditorCastling.q}
+                  onChange={() => toggleFenEditorCastling("q")}
+                />
+                q
+              </label>
+            </div>
+            <div className="button-row">
+              <button type="button" onClick={() => loadFenIntoEditor(positionSearchInput)}>
+                Load FEN
+              </button>
+              <button type="button" onClick={() => applyEditorFenToSearchInput()}>
+                Apply Editor FEN
+              </button>
+              <button type="button" onClick={() => resetFenEditorToStartPosition()}>
+                Start Position
+              </button>
+              <button type="button" onClick={() => clearFenEditorBoard()}>
+                Clear Board
+              </button>
+            </div>
+            <p className="muted">{fenEditorStatus}</p>
+            <p className="muted">Editor FEN: {editorStateToFen()}</p>
+          </div>
         </div>
         <p className="muted">{positionSearchStatus}</p>
         <div className="table-wrap">
@@ -2897,12 +3958,54 @@ export default function Home() {
         <div className="section-head">
           <h2>Opening Explorer</h2>
           <div className="button-row">
-            <button onClick={() => void loadOpeningTree(currentFen ?? positionSearchInput)} disabled={!user}>
+            <select
+              value={openingDepth}
+              onChange={(event) => setOpeningDepth(Math.min(6, Math.max(1, Number(event.target.value))))}
+              disabled={!user}
+            >
+              <option value={1}>Depth 1</option>
+              <option value={2}>Depth 2</option>
+              <option value={3}>Depth 3</option>
+              <option value={4}>Depth 4</option>
+              <option value={5}>Depth 5</option>
+              <option value={6}>Depth 6</option>
+            </select>
+            <button
+              onClick={() => void loadOpeningTree(currentFen ?? positionSearchInput, { depth: openingDepth })}
+              disabled={!user}
+            >
               Refresh Tree
+            </button>
+            <button
+              onClick={() => {
+                if (openingActiveFen) {
+                  void filterGamesByOpeningNode(openingActiveFen);
+                }
+              }}
+              disabled={!user || !openingActiveFen}
+            >
+              Filter Games by Node
             </button>
           </div>
         </div>
         <p className="muted">{openingTreeStatus}</p>
+        {openingPath.length > 0 ? (
+          <div className="button-row">
+            {openingPath.map((entry, index) => (
+              <button
+                type="button"
+                key={`${entry.fen}-${index}`}
+                className={index === openingPath.length - 1 ? "crumb-active" : ""}
+                onClick={() => {
+                  void jumpToOpeningPath(index);
+                }}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {openingActiveFen ? <p className="muted">Current node: {openingActiveFen}</p> : null}
         {openingTree ? (
           <div className="table-wrap">
             <table>
@@ -2930,7 +4033,7 @@ export default function Home() {
                       {move.nextFenNorm ? (
                         <button
                           onClick={() => {
-                            void diveOpeningMove(move.nextFenNorm ?? "");
+                            void diveOpeningMove(move.nextFenNorm ?? "", move.moveUci);
                           }}
                         >
                           Dive
@@ -2958,6 +4061,12 @@ export default function Home() {
             onChange={(event) => setNewCollectionName(event.target.value)}
             disabled={!user}
           />
+          <input
+            placeholder="Description (optional)"
+            value={newCollectionDescription}
+            onChange={(event) => setNewCollectionDescription(event.target.value)}
+            disabled={!user}
+          />
           <button onClick={() => void createCollection()} disabled={!user || !newCollectionName.trim()}>
             Create Collection
           </button>
@@ -2968,8 +4077,32 @@ export default function Home() {
             <div key={collection.id} className="saved-filter-item">
               <div>
                 <strong>{collection.name}</strong> ({collection.gameCount})
+                {collection.description ? (
+                  <p className="muted">{collection.description}</p>
+                ) : null}
               </div>
-              <button onClick={() => setCollectionFilterId(String(collection.id))}>Filter</button>
+              <div className="button-row">
+                <button onClick={() => setCollectionFilterId(String(collection.id))}>Filter</button>
+                {editingCollectionId === collection.id ? (
+                  <>
+                    <input
+                      value={editingCollectionName}
+                      onChange={(event) => setEditingCollectionName(event.target.value)}
+                      placeholder="Collection name"
+                    />
+                    <input
+                      value={editingCollectionDescription}
+                      onChange={(event) => setEditingCollectionDescription(event.target.value)}
+                      placeholder="Description"
+                    />
+                    <button onClick={() => void saveCollectionEdits(collection.id)}>Save</button>
+                    <button onClick={() => cancelEditingCollection()}>Cancel</button>
+                  </>
+                ) : (
+                  <button onClick={() => startEditingCollection(collection)}>Edit</button>
+                )}
+                <button onClick={() => void deleteCollectionItem(collection)}>Delete</button>
+              </div>
             </div>
           ))}
           {collections.length === 0 ? <p className="muted">No collections yet</p> : null}
@@ -3004,7 +4137,28 @@ export default function Home() {
               <div>
                 <strong style={{ color: tag.color ?? undefined }}>{tag.name}</strong> ({tag.gameCount ?? 0})
               </div>
-              <button onClick={() => setTagFilterId(String(tag.id))}>Filter</button>
+              <div className="button-row">
+                <button onClick={() => setTagFilterId(String(tag.id))}>Filter</button>
+                {editingTagId === tag.id ? (
+                  <>
+                    <input
+                      value={editingTagName}
+                      onChange={(event) => setEditingTagName(event.target.value)}
+                      placeholder="Tag name"
+                    />
+                    <input
+                      type="color"
+                      value={editingTagColor}
+                      onChange={(event) => setEditingTagColor(event.target.value)}
+                    />
+                    <button onClick={() => void saveTagEdits(tag.id)}>Save</button>
+                    <button onClick={() => cancelEditingTag()}>Cancel</button>
+                  </>
+                ) : (
+                  <button onClick={() => startEditingTag(tag)}>Edit</button>
+                )}
+                <button onClick={() => void deleteTagItem(tag)}>Delete</button>
+              </div>
             </div>
           ))}
           {tags.length === 0 ? <p className="muted">No tags yet</p> : null}
