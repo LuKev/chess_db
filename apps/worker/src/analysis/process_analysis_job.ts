@@ -66,6 +66,11 @@ async function runStockfishAnalysis(params: {
   fen: string;
   limits: AnalysisLimits;
   onCancelPoll: () => Promise<boolean>;
+  onInfo: (info: {
+    evalCp: number | null;
+    evalMate: number | null;
+    pv: string | null;
+  }) => Promise<void>;
   cancelPollMs: number;
 }): Promise<AnalysisResult | { cancelled: true }> {
   const child = spawn(params.stockfishBinary, [], {
@@ -126,6 +131,7 @@ async function runStockfishAnalysis(params: {
         const parsed = parseScoreFromInfo(line);
         if (parsed.evalCp !== null || parsed.evalMate !== null || parsed.pv) {
           lastInfo = parsed;
+          void params.onInfo(parsed);
         }
       }
 
@@ -257,6 +263,7 @@ export async function processAnalysisJob(
   );
 
   try {
+    let lastInfoPersistMs = 0;
     const result = await runStockfishAnalysis({
       stockfishBinary: params.stockfishBinary,
       fen: request.fen,
@@ -266,6 +273,23 @@ export async function processAnalysisJob(
         timeMs: request.time_ms,
       },
       onCancelPoll: async () => isCancelRequested(params.pool, params.analysisRequestId),
+      onInfo: async (info) => {
+        const now = Date.now();
+        if (now - lastInfoPersistMs < 500) {
+          return;
+        }
+        lastInfoPersistMs = now;
+
+        await params.pool.query(
+          `UPDATE engine_requests
+           SET principal_variation = $2,
+               eval_cp = $3,
+               eval_mate = $4,
+               updated_at = NOW()
+           WHERE id = $1 AND status = 'running'`,
+          [params.analysisRequestId, info.pv, info.evalCp, info.evalMate]
+        );
+      },
       cancelPollMs: params.cancelPollMs,
     });
 

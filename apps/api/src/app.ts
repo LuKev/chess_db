@@ -95,7 +95,7 @@ export async function buildApp(
   await registerFilterRoutes(app, pool);
   await registerImportRoutes(app, pool, config, importQueue, objectStorage);
   await registerAnalysisRoutes(app, pool, analysisQueue);
-  await registerExportRoutes(app, pool, exportQueue);
+  await registerExportRoutes(app, pool, exportQueue, objectStorage);
 
   app.addHook("onClose", async () => {
     if (ownsImportQueue) {

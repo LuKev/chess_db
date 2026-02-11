@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
+import { Readable } from "node:stream";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createPool, resetDatabase } from "../src/db.js";
@@ -50,6 +51,7 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
   const enqueuedAnalysis: Array<{ analysisRequestId: number; userId: number }> = [];
   const enqueuedExports: Array<{ exportJobId: number; userId: number }> = [];
   const uploadedObjects: Array<{ key: string; contentType: string }> = [];
+  const objectStore = new Map<string, string>();
 
   beforeAll(async () => {
     const noOpQueue: ImportQueue = {
@@ -73,12 +75,20 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     const noOpStorage: ObjectStorage = {
       ensureBucket: async () => {},
       uploadObject: async ({ key, contentType, body }) => {
+        let bodyText = "";
         for await (const unusedChunk of body as AsyncIterable<unknown>) {
-          // Drain stream to emulate storage upload consumption in tests.
-          void unusedChunk;
+          if (typeof unusedChunk === "string") {
+            bodyText += unusedChunk;
+          } else if (unusedChunk instanceof Uint8Array) {
+            bodyText += Buffer.from(unusedChunk).toString("utf8");
+          } else {
+            bodyText += String(unusedChunk);
+          }
         }
         uploadedObjects.push({ key, contentType });
+        objectStore.set(key, bodyText);
       },
+      getObjectStream: async (key) => Readable.from([objectStore.get(key) ?? ""]),
       close: async () => {},
     };
 
@@ -121,6 +131,7 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     enqueuedAnalysis.length = 0;
     enqueuedExports.length = 0;
     uploadedObjects.length = 0;
+    objectStore.clear();
   });
 
   afterAll(async () => {
@@ -427,6 +438,128 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(cancel.json().status).toBe("cancelled");
   });
 
+  it("supports PGN download and per-user annotations", async () => {
+    const userA = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "viewer-a@example.com",
+        password: "passwordViewerA!",
+      },
+    });
+    const userB = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "viewer-b@example.com",
+        password: "passwordViewerB!",
+      },
+    });
+    const cookieA = extractCookie(userA.headers["set-cookie"]);
+    const cookieB = extractCookie(userB.headers["set-cookie"]);
+
+    const createGame = await app.inject({
+      method: "POST",
+      url: "/api/games",
+      headers: { cookie: cookieA },
+      payload: {
+        white: "ViewerA",
+        black: "ViewerB",
+        result: "1-0",
+        movesHash: "viewer-hash-1",
+        pgn: "[Event \"Viewer\"]\n\n1. e4 e5 1-0",
+        moveTree: {
+          mainline: ["e4", "e5"],
+        },
+      },
+    });
+
+    expect(createGame.statusCode).toBe(201);
+    const gameId = createGame.json().id as number;
+
+    const pgnA = await app.inject({
+      method: "GET",
+      url: `/api/games/${gameId}/pgn`,
+      headers: { cookie: cookieA },
+    });
+    expect(pgnA.statusCode).toBe(200);
+    expect(pgnA.body).toContain("[Event \"Viewer\"]");
+
+    const pgnB = await app.inject({
+      method: "GET",
+      url: `/api/games/${gameId}/pgn`,
+      headers: { cookie: cookieB },
+    });
+    expect(pgnB.statusCode).toBe(404);
+
+    const putAnnotations = await app.inject({
+      method: "PUT",
+      url: `/api/games/${gameId}/annotations`,
+      headers: { cookie: cookieA },
+      payload: {
+        annotations: {
+          comment: "Critical position after 1...e5",
+        },
+      },
+    });
+    expect(putAnnotations.statusCode).toBe(200);
+
+    const getAnnotationsA = await app.inject({
+      method: "GET",
+      url: `/api/games/${gameId}/annotations`,
+      headers: { cookie: cookieA },
+    });
+    expect(getAnnotationsA.statusCode).toBe(200);
+    expect(getAnnotationsA.json().annotations.comment).toBe(
+      "Critical position after 1...e5"
+    );
+
+    const getAnnotationsB = await app.inject({
+      method: "GET",
+      url: `/api/games/${gameId}/annotations`,
+      headers: { cookie: cookieB },
+    });
+    expect(getAnnotationsB.statusCode).toBe(404);
+  });
+
+  it("applies per-user analysis queue rate limiting", async () => {
+    const user = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "analysis-limit@example.com",
+        password: "passwordLimit!",
+      },
+    });
+    const cookie = extractCookie(user.headers["set-cookie"]);
+
+    for (let i = 0; i < 3; i += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/analysis",
+        headers: { cookie },
+        payload: {
+          fen: "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5",
+          depth: 10,
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+    }
+
+    const fourth = await app.inject({
+      method: "POST",
+      url: "/api/analysis",
+      headers: { cookie },
+      payload: {
+        fen: "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5",
+        depth: 10,
+      },
+    });
+
+    expect(fourth.statusCode).toBe(429);
+  });
+
   it("creates export jobs by ids and query", async () => {
     const user = await app.inject({
       method: "POST",
@@ -475,6 +608,64 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(exportStatus.statusCode).toBe(200);
     expect(exportStatus.json().status).toBe("queued");
+  });
+
+  it("downloads completed export artifacts for the owning user", async () => {
+    const userA = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "download-a@example.com",
+        password: "passwordDownloadA!",
+      },
+    });
+    const userB = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "download-b@example.com",
+        password: "passwordDownloadB!",
+      },
+    });
+    const cookieA = extractCookie(userA.headers["set-cookie"]);
+    const cookieB = extractCookie(userB.headers["set-cookie"]);
+
+    const userRow = await pool.query<{ id: string | number }>(
+      "SELECT id FROM users WHERE email = 'download-a@example.com'"
+    );
+    const userId = Number(userRow.rows[0].id);
+
+    const exportRow = await pool.query<{ id: string | number }>(
+      `INSERT INTO export_jobs (
+         user_id,
+         status,
+         mode,
+         output_object_key,
+         exported_games
+       ) VALUES ($1, 'completed', 'query', 'exports/user-a/job-1.pgn', 2)
+       RETURNING id`,
+      [userId]
+    );
+
+    const exportId = Number(exportRow.rows[0].id);
+    objectStore.set("exports/user-a/job-1.pgn", "[Event \"Export\"]\n\n1. e4 e5 1-0");
+
+    const ownerDownload = await app.inject({
+      method: "GET",
+      url: `/api/exports/${exportId}/download`,
+      headers: { cookie: cookieA },
+    });
+
+    expect(ownerDownload.statusCode).toBe(200);
+    expect(ownerDownload.body).toContain("[Event \"Export\"]");
+
+    const nonOwnerDownload = await app.inject({
+      method: "GET",
+      url: `/api/exports/${exportId}/download`,
+      headers: { cookie: cookieB },
+    });
+
+    expect(nonOwnerDownload.statusCode).toBe(404);
   });
   }
 );

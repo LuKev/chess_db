@@ -42,6 +42,10 @@ const ListGamesQuerySchema = z.object({
   toDate: z.string().date().optional(),
 });
 
+const UpdateAnnotationsSchema = z.object({
+  annotations: z.record(z.string(), z.unknown()),
+});
+
 function normalizeValue(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -310,6 +314,107 @@ export async function registerGameRoutes(
         startingFen: row.starting_fen,
         pgn: row.pgn_text,
         moveTree: row.move_tree,
+      };
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/games/:id/pgn",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      if (!Number.isInteger(gameId) || gameId <= 0) {
+        return reply.status(400).send({ error: "Invalid game id" });
+      }
+
+      const result = await pool.query<{ pgn_text: string }>(
+        `SELECT gp.pgn_text
+         FROM games g
+         JOIN game_pgn gp ON gp.game_id = g.id
+         WHERE g.id = $1 AND g.user_id = $2`,
+        [gameId, request.user!.id]
+      );
+
+      if (!result.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+
+      reply.type("application/x-chess-pgn");
+      return reply.send(result.rows[0].pgn_text);
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/games/:id/annotations",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      if (!Number.isInteger(gameId) || gameId <= 0) {
+        return reply.status(400).send({ error: "Invalid game id" });
+      }
+
+      const ownership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [gameId, request.user!.id]
+      );
+
+      if (!ownership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+
+      const result = await pool.query<{ annotations: Record<string, unknown> }>(
+        `SELECT annotations
+         FROM user_annotations
+         WHERE game_id = $1 AND user_id = $2`,
+        [gameId, request.user!.id]
+      );
+
+      return {
+        gameId,
+        annotations: result.rowCount ? result.rows[0].annotations : {},
+      };
+    }
+  );
+
+  app.put<{ Params: { id: string } }>(
+    "/api/games/:id/annotations",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      if (!Number.isInteger(gameId) || gameId <= 0) {
+        return reply.status(400).send({ error: "Invalid game id" });
+      }
+
+      const parsed = UpdateAnnotationsSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten(),
+        });
+      }
+
+      const ownership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [gameId, request.user!.id]
+      );
+
+      if (!ownership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+
+      await pool.query(
+        `INSERT INTO user_annotations (user_id, game_id, annotations)
+         VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (user_id, game_id)
+         DO UPDATE SET
+           annotations = EXCLUDED.annotations,
+           updated_at = NOW()`,
+        [request.user!.id, gameId, JSON.stringify(parsed.data.annotations)]
+      );
+
+      return {
+        gameId,
+        annotations: parsed.data.annotations,
       };
     }
   );

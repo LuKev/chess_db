@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { requireUser } from "../auth.js";
 import type { ExportQueue } from "../infrastructure/queue.js";
+import type { ObjectStorage } from "../infrastructure/storage.js";
 
 const ExportByIdsSchema = z.object({
   mode: z.literal("ids"),
@@ -28,7 +29,8 @@ function toId(value: number | string): number {
 export async function registerExportRoutes(
   app: FastifyInstance,
   pool: Pool,
-  queue: ExportQueue
+  queue: ExportQueue,
+  storage: ObjectStorage
 ): Promise<void> {
   app.post("/api/exports", { preHandler: requireUser }, async (request, reply) => {
     const parsed = CreateExportSchema.safeParse(request.body);
@@ -177,4 +179,47 @@ export async function registerExportRoutes(
       })),
     };
   });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/exports/:id/download",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const exportJobId = Number(request.params.id);
+      if (!Number.isInteger(exportJobId) || exportJobId <= 0) {
+        return reply.status(400).send({ error: "Invalid export id" });
+      }
+
+      const result = await pool.query<{
+        output_object_key: string | null;
+        status: string;
+      }>(
+        `SELECT output_object_key, status
+         FROM export_jobs
+         WHERE id = $1 AND user_id = $2`,
+        [exportJobId, request.user!.id]
+      );
+
+      if (!result.rowCount) {
+        return reply.status(404).send({ error: "Export job not found" });
+      }
+
+      const job = result.rows[0];
+      if (job.status !== "completed" || !job.output_object_key) {
+        return reply.status(409).send({ error: "Export artifact is not ready" });
+      }
+
+      try {
+        const objectStream = await storage.getObjectStream(job.output_object_key);
+        reply.header("content-type", "application/x-chess-pgn");
+        reply.header(
+          "content-disposition",
+          `attachment; filename="export-${exportJobId}.pgn"`
+        );
+        return reply.send(objectStream);
+      } catch (error) {
+        request.log.error(error);
+        return reply.status(500).send({ error: "Failed to read export artifact" });
+      }
+    }
+  );
 }

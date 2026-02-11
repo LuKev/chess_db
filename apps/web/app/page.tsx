@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Chess } from "chess.js";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type User = {
   id: number;
@@ -18,6 +19,21 @@ type GameRow = {
   eco: string | null;
   plyCount: number | null;
   timeControl: string | null;
+};
+
+type GameDetail = {
+  id: number;
+  white: string;
+  black: string;
+  result: string;
+  event: string | null;
+  site: string | null;
+  eco: string | null;
+  date: string | null;
+  plyCount: number | null;
+  startingFen: string | null;
+  pgn: string;
+  moveTree: Record<string, unknown>;
 };
 
 type GamesResponse = {
@@ -130,6 +146,91 @@ async function fetchJson<T>(
   return { status: response.status, data };
 }
 
+async function fetchText(path: string, init: RequestInit = {}): Promise<{
+  status: number;
+  text: string;
+}> {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
+    ...init,
+    credentials: "include",
+  });
+
+  return {
+    status: response.status,
+    text: await response.text(),
+  };
+}
+
+function extractMainlineSan(moveTree: Record<string, unknown>): string[] {
+  const direct = moveTree.mainline;
+  if (
+    Array.isArray(direct) &&
+    direct.every((value) => typeof value === "string")
+  ) {
+    return direct as string[];
+  }
+
+  const moves = moveTree.moves;
+  if (!Array.isArray(moves)) {
+    return [];
+  }
+
+  const sans: string[] = [];
+  for (const move of moves) {
+    if (!move || typeof move !== "object") {
+      continue;
+    }
+
+    const notation = (move as { notation?: { notation?: string } }).notation;
+    if (notation?.notation) {
+      sans.push(notation.notation);
+    }
+  }
+
+  return sans;
+}
+
+function buildFenHistory(startingFen: string | null, sans: string[]): string[] {
+  const initialFen =
+    startingFen && startingFen !== "startpos"
+      ? startingFen
+      : undefined;
+
+  const chess = new Chess(initialFen);
+  const history = [chess.fen()];
+
+  for (const san of sans) {
+    const move = chess.move(san, { strict: false });
+    if (!move) {
+      break;
+    }
+    history.push(chess.fen());
+  }
+
+  return history;
+}
+
+function fenToBoard(fen: string): string[][] {
+  const piecePlacement = fen.split(" ")[0];
+  const ranks = piecePlacement.split("/");
+
+  return ranks.map((rank) => {
+    const squares: string[] = [];
+    for (const char of rank) {
+      if (/\d/.test(char)) {
+        squares.push(...Array.from({ length: Number(char) }, () => ""));
+      } else {
+        squares.push(char);
+      }
+    }
+    return squares;
+  });
+}
+
+function pieceToSymbol(piece: string): string {
+  return piece || "";
+}
+
 export default function Home() {
   const [email, setEmail] = useState("player@example.com");
   const [password, setPassword] = useState("password123");
@@ -148,6 +249,17 @@ export default function Home() {
   const [games, setGames] = useState<GamesResponse | null>(null);
   const [tableStatus, setTableStatus] = useState("Sign in to load games");
 
+  const [selectedGameId, setSelectedGameId] = useState<number | null>(null);
+  const [selectedGame, setSelectedGame] = useState<GameDetail | null>(null);
+  const [viewerStatus, setViewerStatus] = useState("Select a game to open viewer");
+  const [pgnText, setPgnText] = useState("");
+  const [notationSans, setNotationSans] = useState<string[]>([]);
+  const [fenHistory, setFenHistory] = useState<string[]>([]);
+  const [cursor, setCursor] = useState(0);
+  const [autoplay, setAutoplay] = useState(false);
+  const [annotationText, setAnnotationText] = useState("");
+  const [annotationStatus, setAnnotationStatus] = useState("No annotations loaded");
+
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importStatus, setImportStatus] = useState("Sign in to import PGN files");
   const [imports, setImports] = useState<ImportJob[]>([]);
@@ -155,12 +267,15 @@ export default function Home() {
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [filterName, setFilterName] = useState("");
   const [filterMessage, setFilterMessage] = useState("Sign in to manage saved filters");
+
   const [analysisFen, setAnalysisFen] = useState(
     "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5"
   );
   const [analysisDepth, setAnalysisDepth] = useState(12);
   const [analysisStatus, setAnalysisStatus] = useState("Sign in to run analysis");
   const [activeAnalysis, setActiveAnalysis] = useState<AnalysisResponse | null>(null);
+  const analysisStreamRef = useRef<EventSource | null>(null);
+
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [exportStatus, setExportStatus] = useState("Sign in to create exports");
 
@@ -170,6 +285,9 @@ export default function Home() {
     }
     return Math.max(1, Math.ceil(games.total / games.pageSize));
   }, [games]);
+
+  const currentFen = fenHistory[Math.min(cursor, Math.max(0, fenHistory.length - 1))] ?? null;
+  const board = currentFen ? fenToBoard(currentFen) : null;
 
   async function refreshSession(): Promise<void> {
     const response = await fetchJson<{ user: User }>("/api/auth/me", {
@@ -187,6 +305,8 @@ export default function Home() {
     setImports([]);
     setExportJobs([]);
     setSavedFilters([]);
+    setSelectedGame(null);
+    setSelectedGameId(null);
     setAuthMessage("Not signed in");
   }
 
@@ -228,6 +348,100 @@ export default function Home() {
         ? `${response.data.total} game(s) matched`
         : "No games match current filters"
     );
+  }
+
+  async function openGameViewer(gameId: number): Promise<void> {
+    setSelectedGameId(gameId);
+    setViewerStatus(`Loading game #${gameId}...`);
+
+    const gameResponse = await fetchJson<GameDetail>(`/api/games/${gameId}`, {
+      method: "GET",
+    });
+
+    if (gameResponse.status !== 200 || !("id" in gameResponse.data)) {
+      setViewerStatus(
+        `Failed to load game${"error" in gameResponse.data && gameResponse.data.error ? `: ${gameResponse.data.error}` : ""}`
+      );
+      return;
+    }
+
+    const game = gameResponse.data;
+    const sans = extractMainlineSan(game.moveTree);
+    const history = buildFenHistory(game.startingFen, sans);
+
+    setSelectedGame(game);
+    setNotationSans(sans);
+    setFenHistory(history);
+    setCursor(0);
+    setAutoplay(false);
+    setViewerStatus(`Viewing game #${game.id}: ${game.white} vs ${game.black}`);
+
+    const pgnResponse = await fetchText(`/api/games/${gameId}/pgn`, {
+      method: "GET",
+    });
+
+    if (pgnResponse.status === 200) {
+      setPgnText(pgnResponse.text);
+    } else {
+      setPgnText(game.pgn);
+    }
+
+    const annotations = await fetchJson<{ gameId: number; annotations: Record<string, unknown> }>(
+      `/api/games/${gameId}/annotations`,
+      {
+        method: "GET",
+      }
+    );
+
+    if (annotations.status === 200 && "annotations" in annotations.data) {
+      const comment = annotations.data.annotations.comment;
+      setAnnotationText(typeof comment === "string" ? comment : "");
+      setAnnotationStatus("Annotations loaded");
+    } else {
+      setAnnotationText("");
+      setAnnotationStatus("No annotations found");
+    }
+  }
+
+  async function saveAnnotations(): Promise<void> {
+    if (!selectedGameId) {
+      return;
+    }
+
+    const response = await fetchJson<{ gameId: number }>(
+      `/api/games/${selectedGameId}/annotations`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          annotations: {
+            comment: annotationText,
+            cursor,
+          },
+        }),
+      }
+    );
+
+    if (response.status !== 200) {
+      setAnnotationStatus(
+        `Failed to save annotations${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+
+    setAnnotationStatus("Annotations saved");
+  }
+
+  async function copyFen(): Promise<void> {
+    if (!currentFen) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(currentFen);
+      setViewerStatus("FEN copied to clipboard");
+    } catch {
+      setViewerStatus("Failed to copy FEN");
+    }
   }
 
   async function refreshImports(): Promise<void> {
@@ -276,7 +490,9 @@ export default function Home() {
 
     setSavedFilters(response.data.items);
     setFilterMessage(
-      response.data.items.length > 0 ? `${response.data.items.length} saved filter(s)` : "No saved filters"
+      response.data.items.length > 0
+        ? `${response.data.items.length} saved filter(s)`
+        : "No saved filters"
     );
   }
 
@@ -300,7 +516,9 @@ export default function Home() {
 
     setExportJobs(response.data.items);
     setExportStatus(
-      response.data.items.length > 0 ? `${response.data.items.length} export job(s)` : "No export jobs yet"
+      response.data.items.length > 0
+        ? `${response.data.items.length} export job(s)`
+        : "No export jobs yet"
     );
   }
 
@@ -320,13 +538,23 @@ export default function Home() {
 
     await refreshSession();
     setPage(1);
-    await Promise.all([refreshGames(1), refreshImports(), refreshSavedFilters(), refreshExports()]);
+    await Promise.all([
+      refreshGames(1),
+      refreshImports(),
+      refreshSavedFilters(),
+      refreshExports(),
+    ]);
   }
 
   async function logout(): Promise<void> {
     await fetchJson<{ ok: boolean }>("/api/auth/logout", {
       method: "POST",
     });
+
+    if (analysisStreamRef.current) {
+      analysisStreamRef.current.close();
+      analysisStreamRef.current = null;
+    }
 
     await refreshSession();
   }
@@ -378,10 +606,14 @@ export default function Home() {
     form.append("file", importFile);
 
     setImportStatus("Uploading and queueing import job...");
-    const response = await fetchJson<{ id: number }>("/api/imports", {
-      method: "POST",
-      body: form,
-    }, { jsonBody: false });
+    const response = await fetchJson<{ id: number }>(
+      "/api/imports",
+      {
+        method: "POST",
+        body: form,
+      },
+      { jsonBody: false }
+    );
 
     if (response.status !== 201) {
       setImportStatus(
@@ -462,6 +694,73 @@ export default function Home() {
     setAnalysisStatus(`Analysis #${response.data.id}: ${response.data.status}`);
   }
 
+  function openAnalysisStream(analysisId: number): void {
+    if (analysisStreamRef.current) {
+      analysisStreamRef.current.close();
+    }
+
+    const stream = new EventSource(`${apiBaseUrl()}/api/analysis/${analysisId}/stream`, {
+      withCredentials: true,
+    });
+
+    stream.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          id: number;
+          status: string;
+          result: AnalysisResponse["result"];
+          error: string | null;
+          updatedAt: string;
+        };
+
+        setActiveAnalysis((current) => {
+          if (!current || current.id !== payload.id) {
+            return {
+              id: payload.id,
+              status: payload.status,
+              fen: analysisFen,
+              limits: {
+                depth: analysisDepth,
+                nodes: null,
+                timeMs: null,
+              },
+              result: payload.result,
+              error: payload.error,
+              createdAt: payload.updatedAt,
+              updatedAt: payload.updatedAt,
+            };
+          }
+
+          return {
+            ...current,
+            status: payload.status,
+            result: payload.result,
+            error: payload.error,
+            updatedAt: payload.updatedAt,
+          };
+        });
+
+        setAnalysisStatus(`Analysis #${payload.id}: ${payload.status}`);
+
+        if (["completed", "failed", "cancelled"].includes(payload.status)) {
+          stream.close();
+          analysisStreamRef.current = null;
+        }
+      } catch {
+        setAnalysisStatus("Analysis stream payload error");
+      }
+    };
+
+    stream.onerror = () => {
+      setAnalysisStatus("Analysis stream disconnected; using polling fallback");
+      stream.close();
+      analysisStreamRef.current = null;
+      void refreshAnalysis(analysisId);
+    };
+
+    analysisStreamRef.current = stream;
+  }
+
   async function createAnalysis(): Promise<void> {
     if (!user) {
       return;
@@ -484,6 +783,7 @@ export default function Home() {
 
     setAnalysisStatus(`Queued analysis #${response.data.id}`);
     await refreshAnalysis(response.data.id);
+    openAnalysisStream(response.data.id);
   }
 
   async function cancelAnalysis(): Promise<void> {
@@ -503,6 +803,11 @@ export default function Home() {
         `Failed to cancel analysis${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
       );
       return;
+    }
+
+    if (analysisStreamRef.current) {
+      analysisStreamRef.current.close();
+      analysisStreamRef.current = null;
     }
 
     setAnalysisStatus(`Analysis #${activeAnalysis.id}: cancelled`);
@@ -602,27 +907,37 @@ export default function Home() {
   }, [user]);
 
   useEffect(() => {
-    if (!user || !activeAnalysis) {
-      return;
-    }
-
-    if (["completed", "failed", "cancelled"].includes(activeAnalysis.status)) {
+    if (!autoplay || fenHistory.length <= 1) {
       return;
     }
 
     const interval = setInterval(() => {
-      void refreshAnalysis(activeAnalysis.id);
-    }, 1500);
+      setCursor((value) => {
+        const next = value + 1;
+        if (next >= fenHistory.length) {
+          setAutoplay(false);
+          return value;
+        }
+        return next;
+      });
+    }, 700);
 
     return () => clearInterval(interval);
-  }, [user, activeAnalysis]);
+  }, [autoplay, fenHistory.length]);
+
+  useEffect(() => {
+    return () => {
+      if (analysisStreamRef.current) {
+        analysisStreamRef.current.close();
+      }
+    };
+  }, []);
 
   return (
     <main>
       <h1>Chess DB</h1>
       <p className="muted">
-        Sprint 1/2 implementation: auth, tenant-safe data model, import queueing, saved filters, and
-        indexed game search.
+        MVP in progress: auth, import/search/view, analysis, annotations, and export queues.
       </p>
 
       <section className="card">
@@ -660,6 +975,201 @@ export default function Home() {
           </div>
         </form>
         <p className="muted">{authMessage}</p>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Database Home</h2>
+          <button onClick={() => void createSampleGame()} disabled={!user}>
+            Insert Sample Game
+          </button>
+        </div>
+
+        <form className="filters" onSubmit={onFilterSubmit}>
+          <input placeholder="Player" value={player} onChange={(event) => setPlayer(event.target.value)} />
+          <input placeholder="ECO" value={eco} onChange={(event) => setEco(event.target.value)} />
+          <input placeholder="Result" value={result} onChange={(event) => setResult(event.target.value)} />
+          <input
+            placeholder="Time control"
+            value={timeControl}
+            onChange={(event) => setTimeControl(event.target.value)}
+          />
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+          <select value={sort} onChange={(event) => setSort(event.target.value)}>
+            <option value="date_desc">Date desc</option>
+            <option value="date_asc">Date asc</option>
+            <option value="white">White</option>
+            <option value="black">Black</option>
+            <option value="eco">ECO</option>
+          </select>
+          <button type="submit" disabled={!user}>Apply Filters</button>
+        </form>
+
+        <p className="muted">{tableStatus}</p>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>White</th>
+                <th>Black</th>
+                <th>Result</th>
+                <th>Date</th>
+                <th>ECO</th>
+                <th>Event</th>
+                <th>Ply</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {games?.items.map((game) => (
+                <tr key={game.id}>
+                  <td>{game.id}</td>
+                  <td>{game.white}</td>
+                  <td>{game.black}</td>
+                  <td>{game.result}</td>
+                  <td>{game.date ?? "-"}</td>
+                  <td>{game.eco ?? "-"}</td>
+                  <td>{game.event ?? "-"}</td>
+                  <td>{game.plyCount ?? "-"}</td>
+                  <td>
+                    <button onClick={() => void openGameViewer(game.id)} disabled={!user}>
+                      Open
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {games && games.items.length === 0 ? (
+                <tr>
+                  <td colSpan={9}>No rows</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="button-row">
+          <button
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            disabled={!user || page <= 1}
+          >
+            Previous
+          </button>
+          <span>Page {page} / {pageCount}</span>
+          <button
+            onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+            disabled={!user || page >= pageCount}
+          >
+            Next
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Game Viewer</h2>
+          <div className="button-row">
+            <button onClick={() => setCursor(0)} disabled={!selectedGame || cursor <= 0}>|&lt;</button>
+            <button
+              onClick={() => setCursor((value) => Math.max(0, value - 1))}
+              disabled={!selectedGame || cursor <= 0}
+            >
+              &lt;
+            </button>
+            <button
+              onClick={() => setCursor((value) => Math.min(fenHistory.length - 1, value + 1))}
+              disabled={!selectedGame || cursor >= fenHistory.length - 1}
+            >
+              &gt;
+            </button>
+            <button
+              onClick={() => setCursor(Math.max(0, fenHistory.length - 1))}
+              disabled={!selectedGame || cursor >= fenHistory.length - 1}
+            >
+              &gt;|
+            </button>
+            <button onClick={() => setAutoplay((value) => !value)} disabled={!selectedGame}>
+              {autoplay ? "Stop" : "Autoplay"}
+            </button>
+            <button onClick={() => void copyFen()} disabled={!selectedGame || !currentFen}>
+              Copy FEN
+            </button>
+          </div>
+        </div>
+
+        <p className="muted">{viewerStatus}</p>
+
+        {selectedGame && board ? (
+          <div className="viewer-grid">
+            <div>
+              <div className="board">
+                {board.map((rank, rankIndex) => (
+                  <div key={`rank-${rankIndex}`} className="board-rank">
+                    {rank.map((piece, fileIndex) => (
+                      <div
+                        key={`sq-${rankIndex}-${fileIndex}`}
+                        className={`square ${(rankIndex + fileIndex) % 2 === 0 ? "light" : "dark"}`}
+                      >
+                        {pieceToSymbol(piece)}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <p className="muted">
+                {selectedGame.white} vs {selectedGame.black} ({selectedGame.result})
+              </p>
+              <p className="muted">
+                Move index: {cursor}/{Math.max(0, fenHistory.length - 1)}
+              </p>
+              <label>
+                Notes
+                <textarea
+                  rows={4}
+                  value={annotationText}
+                  onChange={(event) => setAnnotationText(event.target.value)}
+                />
+              </label>
+              <div className="button-row">
+                <button onClick={() => void saveAnnotations()} disabled={!selectedGameId}>
+                  Save Notes
+                </button>
+              </div>
+              <p className="muted">{annotationStatus}</p>
+            </div>
+
+            <div>
+              <h3>Notation</h3>
+              <div className="notation-list">
+                {notationSans.map((san, index) => (
+                  <button
+                    key={`${index}-${san}`}
+                    className={cursor === index + 1 ? "active" : ""}
+                    onClick={() => setCursor(index + 1)}
+                  >
+                    {index + 1}. {san}
+                  </button>
+                ))}
+                {notationSans.length === 0 ? <p className="muted">No notation moves parsed</p> : null}
+              </div>
+              <h3>PGN</h3>
+              <pre className="pgn-pre">{pgnText}</pre>
+              <div className="button-row">
+                {selectedGameId ? (
+                  <a
+                    href={`${apiBaseUrl()}/api/games/${selectedGameId}/pgn`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open Raw PGN
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="card">
@@ -716,50 +1226,9 @@ export default function Home() {
 
       <section className="card">
         <div className="section-head">
-          <h2>Exports</h2>
-          <button onClick={() => void createExportByCurrentFilter()} disabled={!user}>
-            Export Current Filter
-          </button>
-        </div>
-        <p className="muted">{exportStatus}</p>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Status</th>
-                <th>Mode</th>
-                <th>Games</th>
-                <th>Output Key</th>
-              </tr>
-            </thead>
-            <tbody>
-              {exportJobs.map((job) => (
-                <tr key={job.id}>
-                  <td>{job.id}</td>
-                  <td>{job.status}</td>
-                  <td>{job.mode}</td>
-                  <td>{job.exportedGames}</td>
-                  <td>{job.outputObjectKey ?? "-"}</td>
-                </tr>
-              ))}
-              {exportJobs.length === 0 ? (
-                <tr>
-                  <td colSpan={5}>No export jobs</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="section-head">
           <h2>Engine Analysis</h2>
           <div className="button-row">
-            <button onClick={() => void createAnalysis()} disabled={!user}>
-              Analyze Position
-            </button>
+            <button onClick={() => void createAnalysis()} disabled={!user}>Analyze Position</button>
             <button
               onClick={() => void cancelAnalysis()}
               disabled={!user || !activeAnalysis || activeAnalysis.status !== "running"}
@@ -797,6 +1266,59 @@ export default function Home() {
 
       <section className="card">
         <div className="section-head">
+          <h2>Exports</h2>
+          <button onClick={() => void createExportByCurrentFilter()} disabled={!user}>
+            Export Current Filter
+          </button>
+        </div>
+        <p className="muted">{exportStatus}</p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Mode</th>
+                <th>Games</th>
+                <th>Output Key</th>
+                <th>Download</th>
+              </tr>
+            </thead>
+            <tbody>
+              {exportJobs.map((job) => (
+                <tr key={job.id}>
+                  <td>{job.id}</td>
+                  <td>{job.status}</td>
+                  <td>{job.mode}</td>
+                  <td>{job.exportedGames}</td>
+                  <td>{job.outputObjectKey ?? "-"}</td>
+                  <td>
+                    {job.status === "completed" ? (
+                      <a
+                        href={`${apiBaseUrl()}/api/exports/${job.id}/download`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Download
+                      </a>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {exportJobs.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>No export jobs</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
           <h2>Saved Filters</h2>
         </div>
 
@@ -821,112 +1343,12 @@ export default function Home() {
                 <strong>{savedFilter.name}</strong>
               </div>
               <div className="button-row">
-                <button onClick={() => applySavedFilter(savedFilter)} disabled={!user}>
-                  Apply
-                </button>
-                <button onClick={() => void deleteFilter(savedFilter.id)} disabled={!user}>
-                  Delete
-                </button>
+                <button onClick={() => applySavedFilter(savedFilter)} disabled={!user}>Apply</button>
+                <button onClick={() => void deleteFilter(savedFilter.id)} disabled={!user}>Delete</button>
               </div>
             </div>
           ))}
           {savedFilters.length === 0 ? <p className="muted">No saved filters</p> : null}
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="section-head">
-          <h2>Database Home</h2>
-          <button onClick={() => void createSampleGame()} disabled={!user}>
-            Insert Sample Game
-          </button>
-        </div>
-
-        <form className="filters" onSubmit={onFilterSubmit}>
-          <input
-            placeholder="Player"
-            value={player}
-            onChange={(event) => setPlayer(event.target.value)}
-          />
-          <input placeholder="ECO" value={eco} onChange={(event) => setEco(event.target.value)} />
-          <input
-            placeholder="Result"
-            value={result}
-            onChange={(event) => setResult(event.target.value)}
-          />
-          <input
-            placeholder="Time control"
-            value={timeControl}
-            onChange={(event) => setTimeControl(event.target.value)}
-          />
-          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
-          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
-          <select value={sort} onChange={(event) => setSort(event.target.value)}>
-            <option value="date_desc">Date desc</option>
-            <option value="date_asc">Date asc</option>
-            <option value="white">White</option>
-            <option value="black">Black</option>
-            <option value="eco">ECO</option>
-          </select>
-          <button type="submit" disabled={!user}>
-            Apply Filters
-          </button>
-        </form>
-
-        <p className="muted">{tableStatus}</p>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>White</th>
-                <th>Black</th>
-                <th>Result</th>
-                <th>Date</th>
-                <th>ECO</th>
-                <th>Event</th>
-                <th>Ply</th>
-              </tr>
-            </thead>
-            <tbody>
-              {games?.items.map((game) => (
-                <tr key={game.id}>
-                  <td>{game.id}</td>
-                  <td>{game.white}</td>
-                  <td>{game.black}</td>
-                  <td>{game.result}</td>
-                  <td>{game.date ?? "-"}</td>
-                  <td>{game.eco ?? "-"}</td>
-                  <td>{game.event ?? "-"}</td>
-                  <td>{game.plyCount ?? "-"}</td>
-                </tr>
-              ))}
-              {games && games.items.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>No rows</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="button-row">
-          <button
-            onClick={() => setPage((value) => Math.max(1, value - 1))}
-            disabled={!user || page <= 1}
-          >
-            Previous
-          </button>
-          <span>
-            Page {page} / {pageCount}
-          </span>
-          <button
-            onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
-            disabled={!user || page >= pageCount}
-          >
-            Next
-          </button>
         </div>
       </section>
     </main>

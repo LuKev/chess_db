@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
   S3Client,
@@ -14,6 +15,7 @@ export type ObjectStorage = {
     body: Readable;
     contentType: string;
   }): Promise<void>;
+  getObjectStream(key: string): Promise<Readable>;
   close(): Promise<void>;
 };
 
@@ -64,6 +66,22 @@ export function createObjectStorage(config: AppConfig): ObjectStorage {
           ContentType: params.contentType,
         })
       );
+    },
+
+    async getObjectStream(key: string): Promise<Readable> {
+      await this.ensureBucket();
+      const result = await client.send(
+        new GetObjectCommand({
+          Bucket: config.s3Bucket,
+          Key: key,
+        })
+      );
+
+      if (!result.Body || typeof (result.Body as Readable)[Symbol.asyncIterator] !== "function") {
+        throw new Error("Storage returned a non-stream response body");
+      }
+
+      return result.Body as Readable;
     },
 
     async close(): Promise<void> {
