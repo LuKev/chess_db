@@ -166,6 +166,37 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(response.body).toContain("chessdb_api_requests_total");
   });
 
+  it("fails startup when production web/api sites mismatch", async () => {
+    const badTopologyConfig = loadConfig({
+      NODE_ENV: "production",
+      PORT: "4000",
+      HOST: "127.0.0.1",
+      CORS_ORIGIN: "https://kezilu.com",
+      DATABASE_URL: "postgresql://unused:unused@localhost:5432/unused",
+      SESSION_SECRET: "topology-session-secret-12345",
+      SESSION_COOKIE_NAME: "chessdb_session",
+      SESSION_TTL_HOURS: "24",
+      REDIS_URL: "redis://127.0.0.1:6379",
+      S3_ENDPOINT: "http://127.0.0.1:9000",
+      S3_REGION: "us-east-1",
+      S3_ACCESS_KEY: "minio",
+      S3_SECRET_KEY: "miniostorage",
+      S3_BUCKET: "chessdb-test",
+      S3_FORCE_PATH_STYLE: "true",
+      PUBLIC_WEB_ORIGIN: "https://kezilu.com",
+      PUBLIC_API_ORIGIN: "https://api.otherdomain.com",
+      ENFORCE_PRODUCTION_TOPOLOGY: "true",
+      AUTO_MIGRATE: "false",
+    });
+
+    await expect(
+      buildApp({
+        config: badTopologyConfig,
+        runMigrationsOnBoot: false,
+      })
+    ).rejects.toThrow(/Cookie topology mismatch/);
+  });
+
   it("register/login/me/logout flow works", async () => {
     const registerResponse = await app.inject({
       method: "POST",
@@ -216,6 +247,117 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
 
     expect(meAfterLogout.statusCode).toBe(401);
+  });
+
+  it("enforces CSRF origin checks on authenticated mutating requests", async () => {
+    const csrfConfig = loadConfig({
+      NODE_ENV: "development",
+      PORT: "4100",
+      HOST: "127.0.0.1",
+      CORS_ORIGIN: "https://kezilu.com",
+      DATABASE_URL: databaseUrl!,
+      SESSION_SECRET: "csrf-session-secret-12345",
+      SESSION_COOKIE_NAME: "chessdb_session",
+      SESSION_TTL_HOURS: "24",
+      REDIS_URL: "redis://127.0.0.1:6379",
+      S3_ENDPOINT: "http://127.0.0.1:9000",
+      S3_REGION: "us-east-1",
+      S3_ACCESS_KEY: "minio",
+      S3_SECRET_KEY: "miniostorage",
+      S3_BUCKET: "chessdb-test",
+      S3_FORCE_PATH_STYLE: "true",
+      ENFORCE_CSRF_ORIGIN_CHECK: "true",
+      AUTH_RATE_LIMIT_ENABLED: "false",
+      AUTO_MIGRATE: "false",
+    });
+
+    const noOpQueue: ImportQueue = {
+      enqueueImport: async () => {},
+      close: async () => {},
+    };
+    const noOpAnalysisQueue: AnalysisQueue = {
+      enqueueAnalysis: async () => {},
+      close: async () => {},
+    };
+    const noOpExportQueue: ExportQueue = {
+      enqueueExport: async () => {},
+      close: async () => {},
+    };
+    const noOpPositionBackfillQueue: PositionBackfillQueue = {
+      enqueuePositionBackfill: async () => {},
+      close: async () => {},
+    };
+    const noOpOpeningBackfillQueue: OpeningBackfillQueue = {
+      enqueueOpeningBackfill: async () => {},
+      close: async () => {},
+    };
+    const noOpStorage: ObjectStorage = {
+      ensureBucket: async () => {},
+      uploadObject: async () => {},
+      getObjectStream: async () => Readable.from([""]),
+      close: async () => {},
+    };
+
+    const csrfApp = await buildApp({
+      config: csrfConfig,
+      pool,
+      importQueue: noOpQueue,
+      analysisQueue: noOpAnalysisQueue,
+      exportQueue: noOpExportQueue,
+      positionBackfillQueue: noOpPositionBackfillQueue,
+      openingBackfillQueue: noOpOpeningBackfillQueue,
+      objectStorage: noOpStorage,
+      runMigrationsOnBoot: false,
+    });
+
+    try {
+      const register = await csrfApp.inject({
+        method: "POST",
+        url: "/api/auth/register",
+        payload: {
+          email: "csrf-flow@example.com",
+          password: "passwordCsrfFlow!",
+        },
+      });
+      expect(register.statusCode).toBe(201);
+      const cookie = extractCookie(register.headers["set-cookie"]);
+
+      const me = await csrfApp.inject({
+        method: "GET",
+        url: "/api/auth/me",
+        headers: { cookie },
+      });
+      expect(me.statusCode).toBe(200);
+
+      const logoutWithoutOrigin = await csrfApp.inject({
+        method: "POST",
+        url: "/api/auth/logout",
+        headers: { cookie },
+      });
+      expect(logoutWithoutOrigin.statusCode).toBe(403);
+
+      const logoutWithInvalidOrigin = await csrfApp.inject({
+        method: "POST",
+        url: "/api/auth/logout",
+        headers: {
+          cookie,
+          origin: "https://attacker.example",
+        },
+      });
+      expect(logoutWithInvalidOrigin.statusCode).toBe(403);
+
+      const logoutWithValidOrigin = await csrfApp.inject({
+        method: "POST",
+        url: "/api/auth/logout",
+        headers: {
+          cookie,
+          origin: "https://kezilu.com",
+        },
+      });
+      expect(logoutWithValidOrigin.statusCode).toBe(200);
+    } finally {
+      await csrfApp.close();
+    }
   });
 
   it("writes audit events for auth actions", async () => {
@@ -546,6 +688,37 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(importJob.statusCode).toBe(200);
     expect(importJob.json().status).toBe("queued");
+
+    const importErrors = await app.inject({
+      method: "GET",
+      url: `/api/imports/${enqueuedJobs[0].importJobId}/errors?page=1&pageSize=10`,
+      headers: { cookie },
+    });
+    expect(importErrors.statusCode).toBe(200);
+    expect(importErrors.json().total).toBe(0);
+  });
+
+  it("queues sample import seed for first-run flow", async () => {
+    const user = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "sample-import@example.com",
+        password: "passwordSample!",
+      },
+    });
+    const cookie = extractCookie(user.headers["set-cookie"]);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/imports/sample",
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(enqueuedJobs).toHaveLength(1);
+    expect(uploadedObjects).toHaveLength(1);
+    expect(uploadedObjects[0].key).toContain("sample-seed.pgn");
   });
 
   it("replays idempotent import creation without duplicating jobs", async () => {
@@ -1078,6 +1251,17 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
     expect(assignTag.statusCode).toBe(201);
 
+    const bulkAssignTag = await app.inject({
+      method: "POST",
+      url: `/api/tags/${tagId}/games`,
+      headers: { cookie },
+      payload: {
+        gameIds: [gameId],
+      },
+    });
+    expect(bulkAssignTag.statusCode).toBe(200);
+    expect(bulkAssignTag.json().assignedCount).toBe(1);
+
     const collection = await app.inject({
       method: "POST",
       url: "/api/collections",
@@ -1106,6 +1290,17 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
     expect(filteredByTag.statusCode).toBe(200);
     expect(filteredByTag.json().items).toHaveLength(1);
+
+    const removeTag = await app.inject({
+      method: "DELETE",
+      url: `/api/tags/${tagId}/games`,
+      headers: { cookie },
+      payload: {
+        gameIds: [gameId],
+      },
+    });
+    expect(removeTag.statusCode).toBe(200);
+    expect(removeTag.json().removedCount).toBe(1);
 
     const filteredByCollection = await app.inject({
       method: "GET",
@@ -1137,6 +1332,18 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
     expect(positionSearch.statusCode).toBe(200);
     expect(positionSearch.json().items.length).toBeGreaterThan(0);
+
+    const materialSearch = await app.inject({
+      method: "POST",
+      url: "/api/search/position/material",
+      headers: { cookie },
+      payload: {
+        fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      },
+    });
+    expect(materialSearch.statusCode).toBe(200);
+    expect(materialSearch.json().items.length).toBeGreaterThan(0);
+    expect(materialSearch.json().items[0].white).toBe("Feature White");
 
     const openingTree = await app.inject({
       method: "GET",

@@ -160,11 +160,27 @@ export async function registerSearchRoutes(
         ply: number;
         stm: "w" | "b";
         fen_norm: string;
+        event: string | null;
+        white: string;
+        black: string;
+        result: string;
+        move_tree: Record<string, unknown>;
       }>(
-        `SELECT game_id, ply, stm, fen_norm
+        `SELECT
+          gp.game_id,
+          gp.ply,
+          gp.stm,
+          gp.fen_norm,
+          g.event,
+          g.white,
+          g.black,
+          g.result,
+          gm.move_tree
          FROM game_positions gp
+         JOIN games g ON g.id = gp.game_id
+         JOIN game_moves gm ON gm.game_id = gp.game_id
          WHERE ${whereSql}
-         ORDER BY game_id DESC, ply ASC
+         ORDER BY gp.game_id DESC, gp.ply ASC
          LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params
       );
@@ -174,14 +190,22 @@ export async function registerSearchRoutes(
         pageSize,
         total: Number(countResult.rows[0].total),
         materialKey,
-        items: rows.rows.map((row) => ({
-          gameId: toId(row.game_id),
-          ply: row.ply,
-          sideToMove: row.stm,
-          fenNorm: row.fen_norm,
-        })),
+        items: rows.rows.map((row) => {
+          const mainline = extractMainlineSans(row.move_tree ?? {});
+          const snippet = buildMoveSnippet(mainline, row.ply);
+          return {
+            gameId: toId(row.game_id),
+            ply: row.ply,
+            sideToMove: row.stm,
+            fenNorm: row.fen_norm,
+            white: row.white,
+            black: row.black,
+            result: row.result,
+            event: row.event,
+            snippet,
+          };
+        }),
       };
     }
   );
 }
-

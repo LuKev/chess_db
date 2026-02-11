@@ -12,11 +12,27 @@ const CreateTagSchema = z.object({
     .optional(),
 });
 
+const TagGamesSchema = z.object({
+  gameIds: z.array(z.number().int().positive()).min(1).max(10_000),
+});
+
 function toId(value: number | string): number {
   if (typeof value === "number") {
     return value;
   }
   return Number(value);
+}
+
+async function assertTagOwnership(
+  pool: Pool,
+  tagId: number,
+  userId: number
+): Promise<boolean> {
+  const tag = await pool.query<{ id: number | string }>(
+    "SELECT id FROM tags WHERE id = $1 AND user_id = $2",
+    [tagId, userId]
+  );
+  return Boolean(tag.rowCount);
 }
 
 export async function registerTagRoutes(
@@ -166,6 +182,53 @@ export async function registerTagRoutes(
     }
   );
 
+  app.post<{ Params: { id: string } }>(
+    "/api/tags/:id/games",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const tagId = Number(request.params.id);
+      if (!Number.isInteger(tagId) || tagId <= 0) {
+        return reply.status(400).send({ error: "Invalid tag id" });
+      }
+
+      const parsed = TagGamesSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten(),
+        });
+      }
+
+      const ownsTag = await assertTagOwnership(pool, tagId, request.user!.id);
+      if (!ownsTag) {
+        return reply.status(404).send({ error: "Tag not found" });
+      }
+
+      const validGames = await pool.query<{ id: number | string }>(
+        `SELECT id
+         FROM games
+         WHERE user_id = $1
+           AND id = ANY($2::bigint[])`,
+        [request.user!.id, parsed.data.gameIds]
+      );
+      const gameIds = validGames.rows.map((row) => toId(row.id));
+
+      for (const gameId of gameIds) {
+        await pool.query(
+          `INSERT INTO game_tags (game_id, tag_id, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (game_id, tag_id) DO NOTHING`,
+          [gameId, tagId, request.user!.id]
+        );
+      }
+
+      return {
+        tagId,
+        assignedCount: gameIds.length,
+      };
+    }
+  );
+
   app.delete<{ Params: { id: string; tagId: string } }>(
     "/api/games/:id/tags/:tagId",
     { preHandler: requireUser },
@@ -191,5 +254,41 @@ export async function registerTagRoutes(
       return reply.status(204).send();
     }
   );
-}
 
+  app.delete<{ Params: { id: string } }>(
+    "/api/tags/:id/games",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const tagId = Number(request.params.id);
+      if (!Number.isInteger(tagId) || tagId <= 0) {
+        return reply.status(400).send({ error: "Invalid tag id" });
+      }
+
+      const parsed = TagGamesSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten(),
+        });
+      }
+
+      const ownsTag = await assertTagOwnership(pool, tagId, request.user!.id);
+      if (!ownsTag) {
+        return reply.status(404).send({ error: "Tag not found" });
+      }
+
+      const result = await pool.query(
+        `DELETE FROM game_tags
+         WHERE user_id = $1
+           AND tag_id = $2
+           AND game_id = ANY($3::bigint[])`,
+        [request.user!.id, tagId, parsed.data.gameIds]
+      );
+
+      return {
+        tagId,
+        removedCount: result.rowCount ?? 0,
+      };
+    }
+  );
+}
