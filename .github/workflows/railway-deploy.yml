@@ -39,15 +39,15 @@ jobs:
 
       - name: Deploy web
         run: |
-          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web
+          railway link --project-id "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web
           railway up --path-as-root apps/web --ci
 
       - name: Deploy api
         run: |
-          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service api
+          railway link --project-id "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service api
           railway up --path-as-root apps/api --ci
 
       - name: Deploy worker
         run: |
-          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker
+          railway link --project-id "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker
           railway up --path-as-root apps/worker --ci
