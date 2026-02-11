@@ -1,6 +1,8 @@
 export type WorkerConfig = {
   heartbeatMs: number;
   workerConcurrency: number;
+  metricsHost: string;
+  metricsPort: number;
   databaseUrl: string;
   redisUrl: string;
   s3Endpoint: string;
@@ -11,6 +13,8 @@ export type WorkerConfig = {
   s3ForcePathStyle: boolean;
   stockfishBinary: string;
   analysisCancelPollMs: number;
+  sentryDsn: string | null;
+  sentryEnvironment: string;
 };
 
 export function loadWorkerConfig(
@@ -20,6 +24,9 @@ export function loadWorkerConfig(
   const heartbeatMs = Number(rawHeartbeat);
   const rawConcurrency = env.WORKER_CONCURRENCY ?? "2";
   const workerConcurrency = Number(rawConcurrency);
+  const metricsHost = env.WORKER_METRICS_HOST ?? "0.0.0.0";
+  const rawMetricsPort = env.WORKER_METRICS_PORT ?? "9465";
+  const metricsPort = Number(rawMetricsPort);
   const databaseUrl = env.DATABASE_URL;
   const redisUrl = env.REDIS_URL;
   const s3Endpoint = env.S3_ENDPOINT;
@@ -31,6 +38,8 @@ export function loadWorkerConfig(
   const stockfishBinary = env.STOCKFISH_BINARY ?? "stockfish";
   const rawAnalysisCancelPollMs = env.ANALYSIS_CANCEL_POLL_MS ?? "500";
   const analysisCancelPollMs = Number(rawAnalysisCancelPollMs);
+  const sentryDsn = env.WORKER_SENTRY_DSN?.trim() || null;
+  const sentryEnvironment = env.WORKER_SENTRY_ENV?.trim() || env.NODE_ENV || "development";
 
   if (!Number.isInteger(heartbeatMs) || heartbeatMs <= 0) {
     throw new Error(
@@ -40,6 +49,11 @@ export function loadWorkerConfig(
   if (!Number.isInteger(workerConcurrency) || workerConcurrency <= 0) {
     throw new Error(
       `Invalid WORKER_CONCURRENCY value: ${rawConcurrency}. Must be a positive integer.`
+    );
+  }
+  if (!Number.isInteger(metricsPort) || metricsPort <= 0 || metricsPort > 65535) {
+    throw new Error(
+      `Invalid WORKER_METRICS_PORT value: ${rawMetricsPort}. Must be an integer between 1 and 65535.`
     );
   }
   if (!databaseUrl) {
@@ -62,6 +76,8 @@ export function loadWorkerConfig(
   return {
     heartbeatMs,
     workerConcurrency,
+    metricsHost,
+    metricsPort,
     databaseUrl,
     redisUrl,
     s3Endpoint,
@@ -72,5 +88,7 @@ export function loadWorkerConfig(
     s3ForcePathStyle,
     stockfishBinary,
     analysisCancelPollMs,
+    sentryDsn,
+    sentryEnvironment,
   };
 }

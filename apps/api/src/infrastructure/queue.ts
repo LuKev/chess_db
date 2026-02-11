@@ -47,7 +47,7 @@ export function createImportQueue(config: AppConfig): ImportQueue {
   return {
     async enqueueImport(payload: ImportJobPayload): Promise<void> {
       await queue.add("import", payload, {
-        jobId: `import:${payload.importJobId}`,
+        jobId: `import-${payload.importJobId}`,
         removeOnComplete: 200,
         removeOnFail: 200,
       });
@@ -70,7 +70,7 @@ export function createAnalysisQueue(config: AppConfig): AnalysisQueue {
   return {
     async enqueueAnalysis(payload: AnalysisJobPayload): Promise<void> {
       await queue.add("analyze", payload, {
-        jobId: `analysis:${payload.analysisRequestId}`,
+        jobId: `analysis-${payload.analysisRequestId}`,
         removeOnComplete: 200,
         removeOnFail: 200,
       });
@@ -93,7 +93,7 @@ export function createExportQueue(config: AppConfig): ExportQueue {
   return {
     async enqueueExport(payload: ExportJobPayload): Promise<void> {
       await queue.add("export", payload, {
-        jobId: `export:${payload.exportJobId}`,
+        jobId: `export-${payload.exportJobId}`,
         removeOnComplete: 200,
         removeOnFail: 200,
       });

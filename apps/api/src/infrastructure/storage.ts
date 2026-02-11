@@ -2,9 +2,9 @@ import {
   CreateBucketCommand,
   GetObjectCommand,
   HeadBucketCommand,
-  PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import type { Readable } from "node:stream";
 import type { AppConfig } from "../config.js";
 
@@ -33,6 +33,8 @@ export function createObjectStorage(config: AppConfig): ObjectStorage {
     region: config.s3Region,
     endpoint: config.s3Endpoint,
     forcePathStyle: config.s3ForcePathStyle,
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
     credentials: {
       accessKeyId: config.s3AccessKey,
       secretAccessKey: config.s3SecretKey,
@@ -58,14 +60,16 @@ export function createObjectStorage(config: AppConfig): ObjectStorage {
 
     async uploadObject(params): Promise<void> {
       await this.ensureBucket();
-      await client.send(
-        new PutObjectCommand({
+      const upload = new Upload({
+        client,
+        params: {
           Bucket: config.s3Bucket,
           Key: params.key,
           Body: params.body,
           ContentType: params.contentType,
-        })
-      );
+        },
+      });
+      await upload.done();
     },
 
     async getObjectStream(key: string): Promise<Readable> {

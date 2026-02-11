@@ -24,3 +24,22 @@
    - API: `POST /api/exports`, `GET /api/exports`, `GET /api/exports/:id`.
    - Worker: `processExportJob` writes PGN export artifacts to object storage.
    - Migration `0003_export_jobs.sql` adds export job tracking schema.
+11. Viewer/analysis/export UX hardening added:
+   - API: `GET /api/games/:id/pgn`, annotations `GET/PUT /api/games/:id/annotations`, SSE `GET /api/analysis/:id/stream`, and `GET /api/exports/:id/download`.
+   - Web UI now includes richer viewer controls, line/variation selector, annotation persistence fields, near-real-time engine stream updates, and export download links.
+12. Password reset flow implemented:
+   - Endpoints: `POST /api/auth/password-reset/request`, `POST /api/auth/password-reset/confirm`.
+   - New migration `0004_password_reset_tokens.sql` stores hashed reset tokens with expiry/usage fields.
+13. Export include-annotations toggle is now implemented end-to-end:
+   - `includeAnnotations` API payload maps to `export_jobs.include_annotations`.
+   - Worker appends serialized annotations as PGN comment lines when enabled.
+14. Runtime gotcha: BullMQ version in this workspace rejects `jobId` values containing `:`. Queue job IDs must use `-` (e.g. `import-123`) or enqueue fails at runtime.
+15. Runtime gotcha: MinIO rejects unknown-length stream uploads for plain `PutObject` (`MissingContentLength`). API upload path now uses `@aws-sdk/lib-storage` `Upload` for multipart stream-safe uploads.
+16. Observability baseline added:
+   - API Prometheus metrics endpoint (`/metrics`) with request counters/latency.
+   - Worker Prometheus endpoint (`WORKER_METRICS_PORT`, default `9465`) with job counters/duration and queue depth gauges.
+   - Optional Sentry hooks for API/worker via `API_SENTRY_DSN` and `WORKER_SENTRY_DSN`.
+   - Local Prometheus/Grafana + alert rules in `ops/observability/`.
+17. Performance harness scripts added:
+   - `scripts/bench_import_throughput.mjs` and `scripts/bench_query_latency.mjs`.
+   - Baseline run results are recorded in `docs/performance_baseline.md`.

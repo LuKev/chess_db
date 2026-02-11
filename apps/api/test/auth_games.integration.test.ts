@@ -143,6 +143,17 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     }
   });
 
+  it("exposes Prometheus metrics endpoint", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/metrics",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(String(response.headers["content-type"])).toContain("text/plain");
+    expect(response.body).toContain("chessdb_api_requests_total");
+  });
+
   it("register/login/me/logout flow works", async () => {
     const registerResponse = await app.inject({
       method: "POST",

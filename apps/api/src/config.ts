@@ -19,6 +19,13 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((value) => value === "true"),
+  API_METRICS_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  API_METRICS_PATH: z.string().min(1).default("/metrics"),
+  API_SENTRY_DSN: z.string().trim().optional(),
+  API_SENTRY_ENV: z.string().trim().optional(),
   UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
   AUTO_MIGRATE: z
     .enum(["true", "false"])
@@ -42,6 +49,10 @@ export type AppConfig = {
   s3SecretKey: string;
   s3Bucket: string;
   s3ForcePathStyle: boolean;
+  apiMetricsEnabled: boolean;
+  apiMetricsPath: string;
+  sentryDsn: string | null;
+  sentryEnvironment: string;
   uploadMaxBytes: number;
   autoMigrate: boolean;
 };
@@ -72,6 +83,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     s3SecretKey: parsed.data.S3_SECRET_KEY,
     s3Bucket: parsed.data.S3_BUCKET,
     s3ForcePathStyle: parsed.data.S3_FORCE_PATH_STYLE,
+    apiMetricsEnabled: parsed.data.API_METRICS_ENABLED,
+    apiMetricsPath: parsed.data.API_METRICS_PATH,
+    sentryDsn: parsed.data.API_SENTRY_DSN?.trim()
+      ? parsed.data.API_SENTRY_DSN.trim()
+      : null,
+    sentryEnvironment:
+      parsed.data.API_SENTRY_ENV?.trim() || parsed.data.NODE_ENV,
     uploadMaxBytes: parsed.data.UPLOAD_MAX_BYTES,
     autoMigrate: parsed.data.AUTO_MIGRATE,
   };

@@ -42,11 +42,23 @@ npm run test
 npm run typecheck
 ```
 
+Benchmark harness:
+
+```bash
+npm run bench:import
+npm run bench:queries
+```
+
 Notes:
 
 1. API migrations auto-run at startup when `AUTO_MIGRATE=true`.
 2. API integration tests require `DATABASE_URL` to be set (CI sets this in `.github/workflows/ci.yml`).
 3. Local worker analysis needs a `stockfish` binary on PATH (`brew install stockfish` on macOS).
+4. API exposes Prometheus metrics at `/metrics` by default; worker exposes metrics at `http://localhost:9465/metrics`.
+5. Optional Sentry support:
+   - API: `API_SENTRY_DSN`, `API_SENTRY_ENV`
+   - Worker: `WORKER_SENTRY_DSN`, `WORKER_SENTRY_ENV`
+6. Local Prometheus/Grafana stack and alert rules are in `ops/observability/`.
 
 ## Implemented Endpoints (Current)
 

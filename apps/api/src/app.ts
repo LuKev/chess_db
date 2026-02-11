@@ -26,6 +26,8 @@ import { registerGameRoutes } from "./routes/games.js";
 import { registerImportRoutes } from "./routes/imports.js";
 import { registerAnalysisRoutes } from "./routes/analysis.js";
 import { registerExportRoutes } from "./routes/exports.js";
+import { createApiMetrics, registerApiMetrics } from "./observability/metrics.js";
+import { captureException } from "./observability/sentry.js";
 
 export type BuildAppOptions = {
   config?: AppConfig;
@@ -57,6 +59,7 @@ export async function buildApp(
   }
 
   const app = Fastify({ logger: true });
+  const apiMetrics = config.apiMetricsEnabled ? createApiMetrics() : null;
 
   await app.register(cookie, { secret: config.sessionSecret });
   await app.register(cors, {
@@ -90,12 +93,38 @@ export async function buildApp(
     };
   });
 
+  if (apiMetrics) {
+    registerApiMetrics(app, apiMetrics, config.apiMetricsPath);
+  }
+
   await registerAuthRoutes(app, pool, config);
   await registerGameRoutes(app, pool);
   await registerFilterRoutes(app, pool);
   await registerImportRoutes(app, pool, config, importQueue, objectStorage);
   await registerAnalysisRoutes(app, pool, analysisQueue);
   await registerExportRoutes(app, pool, exportQueue, objectStorage);
+
+  app.setErrorHandler((error, request, reply) => {
+    captureException(error);
+    request.log.error(error);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const statusCode =
+      typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+    const publicMessage =
+      typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : "Request failed";
+
+    reply.status(statusCode).send({
+      error: statusCode >= 500 ? "Internal server error" : publicMessage,
+    });
+  });
 
   app.addHook("onClose", async () => {
     if (ownsImportQueue) {

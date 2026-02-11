@@ -13,7 +13,10 @@
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces",
     "typecheck": "npm run typecheck --workspaces",
-    "migrate:api": "npm --workspace @chessdb/api run migrate"
+    "migrate:api": "npm --workspace @chessdb/api run migrate",
+    "bench:import": "node scripts/bench_import_throughput.mjs",
+    "bench:queries": "node scripts/bench_query_latency.mjs",
+    "bench:all": "npm run bench:import && npm run bench:queries"
   },
   "engines": {
     "node": ">=20.0.0"
