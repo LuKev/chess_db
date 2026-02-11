@@ -11,6 +11,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/railway-deploy.yml"
+  workflow_dispatch:
 
 concurrency:
   group: railway-deploy-main
@@ -42,4 +43,3 @@ jobs:
 
       - name: Deploy worker
         run: railway up --project "$RAILWAY_PROJECT_ID" --service worker --path-as-root apps/worker --ci
-
