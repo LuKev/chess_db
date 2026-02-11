@@ -75,17 +75,16 @@ Use one Railway project with three services from this repo:
    - Build command: `npm install && npm run build`
    - Start command: `npm run start`
 
-### Web at `kezilu.com/chessdb`
+### Web at `kezilu.com/chess_db`
 
 In the `web` Railway service set:
 
-1. `NEXT_PUBLIC_BASE_PATH=/chessdb`
+1. `NEXT_PUBLIC_BASE_PATH=/chess_db`
 2. `NEXT_PUBLIC_API_BASE_URL=https://<your-api-domain>`
 3. `API_BASE_URL=https://<your-api-domain>`
 
-Then map your custom domain in Railway:
+If you already use a Cloudflare Worker router on `kezilu.com` (as in `tm_server/cloudflare-worker/tm-router`), add a `/chess_db` route there and proxy to your Railway web domain.
 
-1. Add domain `kezilu.com`.
-2. Route/path-prefix `chessdb` to the `web` service (or use your edge/proxy rule to forward `/chessdb`).
+If you are not using a Cloudflare Worker router, you need an edge/proxy rule to forward `/chess_db*` to the Railway web service.
 
-If Railway path routing is limited in your plan/region, route by subdomain (for example `chessdb.kezilu.com`) and use your site proxy to rewrite `/chessdb -> https://chessdb.kezilu.com`.
+If Railway path routing is limited in your plan/region, route by subdomain (for example `chessdb.kezilu.com`) and use your site proxy to rewrite `/chess_db -> https://chessdb.kezilu.com`.
