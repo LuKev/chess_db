@@ -35,7 +35,7 @@ jobs:
           node-version: "22"
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli
+        run: npm install -g @railway/cli@3.14.0
 
       - name: Deploy web
         run: railway up --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web --path-as-root apps/web --ci
