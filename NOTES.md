@@ -140,3 +140,13 @@
      - Production topology mismatch startup guard.
      - Import diagnostics endpoint.
      - Bulk tag assignment/removal and enriched material search payload.
+35. UX polish tranche completed (2026-02-11):
+   - Game viewer now supports keyboard-first navigation:
+     - `ArrowLeft` / `ArrowRight` step moves.
+     - `Home` / `End` jump to start/end.
+     - `Space` toggles autoplay.
+     - Hotkeys are disabled while focus is in inputs/textareas/selects/contenteditable.
+   - Added persistent “recently viewed games” list in web UI:
+     - Stored client-side in `localStorage` key `chessdb_recent_games`.
+     - Auto-updated on each `openGameViewer` call.
+     - Provides one-click reopen actions in the Game Viewer section.

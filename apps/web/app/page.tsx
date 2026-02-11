@@ -152,6 +152,12 @@ type CollectionItem = {
   gameCount: number;
 };
 
+type RecentlyViewedGame = {
+  id: number;
+  label: string;
+  openedAt: string;
+};
+
 type PositionSearchRow = {
   gameId: number;
   ply: number;
@@ -511,6 +517,7 @@ export default function Home() {
 
   const [selectedGameId, setSelectedGameId] = useState<number | null>(null);
   const [selectedGame, setSelectedGame] = useState<GameDetail | null>(null);
+  const [recentlyViewedGames, setRecentlyViewedGames] = useState<RecentlyViewedGame[]>([]);
   const [viewerStatus, setViewerStatus] = useState("Select a game to open viewer");
   const [pgnText, setPgnText] = useState("");
   const [notationLines, setNotationLines] = useState<NotationLine[]>([]);
@@ -598,6 +605,22 @@ export default function Home() {
   );
   const hasAnyGames = (games?.total ?? 0) > 0;
   const hasOpenedGame = selectedGame !== null;
+
+  function rememberViewedGame(game: GameDetail): void {
+    const entry: RecentlyViewedGame = {
+      id: game.id,
+      label: `${game.white} vs ${game.black}`,
+      openedAt: new Date().toISOString(),
+    };
+    setRecentlyViewedGames((current) => {
+      const withoutDuplicate = current.filter((item) => item.id !== game.id);
+      const next = [entry, ...withoutDuplicate].slice(0, 12);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("chessdb_recent_games", JSON.stringify(next));
+      }
+      return next;
+    });
+  }
 
   function applyNotationLine(
     startingFen: string | null,
@@ -737,6 +760,7 @@ export default function Home() {
     };
 
     setSelectedGame(game);
+    rememberViewedGame(game);
     setNotationLines(lines);
     applyNotationLine(game.startingFen, defaultLine, 0);
     setAutoplay(false);
@@ -1815,6 +1839,23 @@ export default function Home() {
     void refreshSession();
     void refreshFilterPresets();
     if (typeof window !== "undefined") {
+      const raw = window.localStorage.getItem("chessdb_recent_games");
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as RecentlyViewedGame[];
+          if (Array.isArray(parsed)) {
+            setRecentlyViewedGames(
+              parsed
+                .filter((entry) => Number.isInteger(entry.id) && typeof entry.label === "string")
+                .slice(0, 12)
+            );
+          }
+        } catch {
+          setRecentlyViewedGames([]);
+        }
+      }
+    }
+    if (typeof window !== "undefined") {
       const token = new URLSearchParams(window.location.search).get("sharedFilter");
       if (token && token.trim().length > 0) {
         setPendingSharedFilterToken(token.trim());
@@ -1893,6 +1934,52 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [autoplay, fenHistory.length]);
+
+  useEffect(() => {
+    if (!selectedGame) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName.toLowerCase();
+      if (
+        tagName === "input" ||
+        tagName === "textarea" ||
+        tagName === "select" ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setCursor((value) => Math.max(0, value - 1));
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setCursor((value) => Math.min(fenHistory.length - 1, value + 1));
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        setCursor(0);
+        return;
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        setCursor(Math.max(0, fenHistory.length - 1));
+        return;
+      }
+      if (event.code === "Space") {
+        event.preventDefault();
+        setAutoplay((value) => !value);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fenHistory.length, selectedGame]);
 
   useEffect(() => {
     if (!currentFen) {
@@ -2297,6 +2384,21 @@ export default function Home() {
         </div>
 
         <p className="muted">{viewerStatus}</p>
+        {recentlyViewedGames.length > 0 ? (
+          <div className="saved-filters">
+            {recentlyViewedGames.map((entry) => (
+              <div key={entry.id} className="saved-filter-item">
+                <div>
+                  <strong>{entry.label}</strong>
+                  <p className="muted">{new Date(entry.openedAt).toLocaleString()}</p>
+                </div>
+                <button onClick={() => void openGameViewer(entry.id)} disabled={!user}>
+                  Reopen #{entry.id}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {selectedGame && board ? (
           <div className="viewer-grid">
