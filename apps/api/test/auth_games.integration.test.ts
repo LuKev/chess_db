@@ -910,10 +910,23 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
       payload: {
         annotations: {
           comment: "Critical position after 1...e5",
+          highlights: ["e4"],
+          arrows: ["e2e4"],
+          cursor: 2,
+          lineId: "mainline",
+        },
+        moveNotes: {
+          "1": {
+            comment: "Occupy the center",
+            nags: [1],
+            highlights: ["e4"],
+            arrows: ["e2e4"],
+          },
         },
       },
     });
     expect(putAnnotations.statusCode).toBe(200);
+    expect(putAnnotations.json().schemaVersion).toBeGreaterThanOrEqual(2);
 
     const getAnnotationsA = await app.inject({
       method: "GET",
@@ -924,6 +937,8 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(getAnnotationsA.json().annotations.comment).toBe(
       "Critical position after 1...e5"
     );
+    expect(getAnnotationsA.json().annotations.highlights).toContain("e4");
+    expect(getAnnotationsA.json().moveNotes["1"].glyphs).toContain(1);
 
     const getAnnotationsB = await app.inject({
       method: "GET",
@@ -931,6 +946,21 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
       headers: { cookie: cookieB },
     });
     expect(getAnnotationsB.statusCode).toBe(404);
+
+    const invalidAnnotations = await app.inject({
+      method: "PUT",
+      url: `/api/games/${gameId}/annotations`,
+      headers: { cookie: cookieA },
+      payload: {
+        moveNotes: {
+          "1": {
+            arrows: ["bad-arrow"],
+          },
+        },
+      },
+    });
+    expect(invalidAnnotations.statusCode).toBe(400);
+    expect(String(invalidAnnotations.json().error)).toContain("Invalid move note");
   });
 
   it("applies per-user analysis queue rate limiting", async () => {
@@ -1283,6 +1313,18 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
     expect(addToCollection.statusCode).toBe(200);
 
+    const updateCollection = await app.inject({
+      method: "PATCH",
+      url: `/api/collections/${collectionId}`,
+      headers: { cookie },
+      payload: {
+        name: "Prep Updated",
+        description: "Main preparation bucket",
+      },
+    });
+    expect(updateCollection.statusCode).toBe(200);
+    expect(updateCollection.json().name).toBe("Prep Updated");
+
     const filteredByTag = await app.inject({
       method: "GET",
       url: `/api/games?tagId=${tagId}`,
@@ -1290,6 +1332,19 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
     expect(filteredByTag.statusCode).toBe(200);
     expect(filteredByTag.json().items).toHaveLength(1);
+
+    const updateTag = await app.inject({
+      method: "PATCH",
+      url: `/api/tags/${tagId}`,
+      headers: { cookie },
+      payload: {
+        name: "Sharp Updated",
+        color: "#00ff00",
+      },
+    });
+    expect(updateTag.statusCode).toBe(200);
+    expect(updateTag.json().name).toBe("Sharp Updated");
+    expect(updateTag.json().color).toBe("#00ff00");
 
     const removeTag = await app.inject({
       method: "DELETE",
@@ -1344,6 +1399,22 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(materialSearch.statusCode).toBe(200);
     expect(materialSearch.json().items.length).toBeGreaterThan(0);
     expect(materialSearch.json().items[0].white).toBe("Feature White");
+
+    const listByPositionFen = await app.inject({
+      method: "GET",
+      url: "/api/games?positionFen=rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      headers: { cookie },
+    });
+    expect(listByPositionFen.statusCode).toBe(200);
+    expect(listByPositionFen.json().items.length).toBeGreaterThan(0);
+    expect(listByPositionFen.json().items[0].id).toBe(gameId);
+
+    const invalidFenFilter = await app.inject({
+      method: "GET",
+      url: "/api/games?positionFen=invalid-fen",
+      headers: { cookie },
+    });
+    expect(invalidFenFilter.statusCode).toBe(400);
 
     const openingTree = await app.inject({
       method: "GET",

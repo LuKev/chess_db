@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Pool, PoolClient } from "pg";
 import { requireUser } from "../auth.js";
+import { normalizeFen } from "../chess/fen.js";
 import { buildPositionIndex } from "../chess/index_positions.js";
 import { extractMainlineSans } from "../chess/move_tree.js";
 
@@ -54,12 +55,58 @@ const ListGamesQuerySchema = z.object({
   avgEloMax: z.coerce.number().int().min(1).max(4000).optional(),
   collectionId: z.coerce.number().int().positive().optional(),
   tagId: z.coerce.number().int().positive().optional(),
+  positionFen: z.string().trim().optional(),
 });
 
+const SquareSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-h][1-8]$/i)
+  .transform((value) => value.toLowerCase());
+
+const ArrowSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-h][1-8][a-h][1-8]$/i)
+  .transform((value) => value.toLowerCase());
+
+const NagsSchema = z.array(z.number().int().min(1).max(255)).max(32);
+
+const RootAnnotationsSchema = z.object({
+  comment: z.string().trim().max(5000).optional(),
+  cursor: z.number().int().min(0).optional(),
+  lineId: z.string().trim().min(1).max(128).optional(),
+  highlights: z.array(SquareSchema).max(128).optional(),
+  arrows: z.array(ArrowSchema).max(128).optional(),
+});
+
+const MoveNoteSchema = z
+  .object({
+    comment: z.string().trim().max(4000).optional(),
+    nags: NagsSchema.optional(),
+    glyphs: NagsSchema.optional(),
+    highlights: z.array(SquareSchema).max(64).optional(),
+    arrows: z.array(ArrowSchema).max(64).optional(),
+    variationNote: z.string().trim().max(4000).optional(),
+  })
+  .refine(
+    (value) =>
+      Boolean(value.comment) ||
+      (value.nags?.length ?? 0) > 0 ||
+      (value.glyphs?.length ?? 0) > 0 ||
+      (value.highlights?.length ?? 0) > 0 ||
+      (value.arrows?.length ?? 0) > 0 ||
+      Boolean(value.variationNote),
+    { message: "Move note must contain at least one annotation field" }
+  );
+
 const UpdateAnnotationsSchema = z.object({
-  schemaVersion: z.number().int().positive().default(1).optional(),
+  schemaVersion: z.number().int().positive().default(2).optional(),
   annotations: z.record(z.string(), z.unknown()).default({}),
-  moveNotes: z.record(z.string(), z.unknown()).default({}).optional(),
+  moveNotes: z
+    .record(z.string().regex(/^\d+$/), z.record(z.string(), z.unknown()))
+    .default({})
+    .optional(),
 });
 
 function normalizeValue(value: string): string {
@@ -71,6 +118,152 @@ function toId(value: number | string): number {
     return value;
   }
   return Number(value);
+}
+
+type NormalizedMoveNote = {
+  comment?: string;
+  nags: number[];
+  highlights: string[];
+  arrows: string[];
+  variationNote?: string;
+};
+
+function normalizeRootAnnotations(raw: Record<string, unknown>): Record<string, unknown> {
+  const parsed = RootAnnotationsSchema.safeParse(raw);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  const fallback: Record<string, unknown> = {};
+  if (typeof raw.comment === "string" && raw.comment.trim().length > 0) {
+    fallback.comment = raw.comment.trim();
+  }
+  if (typeof raw.cursor === "number" && Number.isInteger(raw.cursor) && raw.cursor >= 0) {
+    fallback.cursor = raw.cursor;
+  }
+  if (typeof raw.lineId === "string" && raw.lineId.trim().length > 0) {
+    fallback.lineId = raw.lineId.trim().slice(0, 128);
+  }
+
+  const highlights = Array.isArray(raw.highlights)
+    ? raw.highlights
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .filter((value) => /^[a-h][1-8]$/.test(value))
+    : [];
+  if (highlights.length > 0) {
+    fallback.highlights = highlights.slice(0, 128);
+  }
+
+  const arrows = Array.isArray(raw.arrows)
+    ? raw.arrows
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .filter((value) => /^[a-h][1-8][a-h][1-8]$/.test(value))
+    : [];
+  if (arrows.length > 0) {
+    fallback.arrows = arrows.slice(0, 128);
+  }
+
+  return fallback;
+}
+
+function normalizeMoveNote(raw: Record<string, unknown>): NormalizedMoveNote | null {
+  const parsed = MoveNoteSchema.safeParse(raw);
+  if (parsed.success) {
+    const note = parsed.data;
+    const nags = note.nags ?? note.glyphs ?? [];
+    return {
+      comment: note.comment,
+      nags,
+      highlights: note.highlights ?? [],
+      arrows: note.arrows ?? [],
+      variationNote: note.variationNote,
+    };
+  }
+
+  const fallbackComment =
+    typeof raw.comment === "string" && raw.comment.trim().length > 0
+      ? raw.comment.trim().slice(0, 4000)
+      : undefined;
+  const fallbackVariationNote =
+    typeof raw.variationNote === "string" && raw.variationNote.trim().length > 0
+      ? raw.variationNote.trim().slice(0, 4000)
+      : undefined;
+  const fallbackNagsRaw = Array.isArray(raw.nags)
+    ? raw.nags
+    : Array.isArray(raw.glyphs)
+      ? raw.glyphs
+      : [];
+  const fallbackNags = fallbackNagsRaw
+    .map((value) =>
+      typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 255
+        ? value
+        : null
+    )
+    .filter((value): value is number => value !== null)
+    .slice(0, 32);
+  const fallbackHighlights = Array.isArray(raw.highlights)
+    ? raw.highlights
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .filter((value) => /^[a-h][1-8]$/.test(value))
+        .slice(0, 64)
+    : [];
+  const fallbackArrows = Array.isArray(raw.arrows)
+    ? raw.arrows
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .filter((value) => /^[a-h][1-8][a-h][1-8]$/.test(value))
+        .slice(0, 64)
+    : [];
+
+  if (
+    !fallbackComment &&
+    !fallbackVariationNote &&
+    fallbackNags.length === 0 &&
+    fallbackHighlights.length === 0 &&
+    fallbackArrows.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    comment: fallbackComment,
+    nags: fallbackNags,
+    highlights: fallbackHighlights,
+    arrows: fallbackArrows,
+    variationNote: fallbackVariationNote,
+  };
+}
+
+function normalizeMoveNotes(raw: Record<string, unknown>): Record<string, NormalizedMoveNote> {
+  const entries = Object.entries(raw);
+  const normalized: Record<string, NormalizedMoveNote> = {};
+  for (const [ply, value] of entries) {
+    if (!/^\d+$/.test(ply) || !value || typeof value !== "object") {
+      continue;
+    }
+    const note = normalizeMoveNote(value as Record<string, unknown>);
+    if (!note) {
+      continue;
+    }
+    normalized[ply] = note;
+  }
+  return normalized;
+}
+
+function toClientMoveNotes(
+  notes: Record<string, NormalizedMoveNote>
+): Record<string, unknown> {
+  const client: Record<string, unknown> = {};
+  for (const [ply, note] of Object.entries(notes)) {
+    client[ply] = {
+      comment: note.comment,
+      nags: note.nags,
+      glyphs: note.nags,
+      highlights: note.highlights,
+      arrows: note.arrows,
+      variationNote: note.variationNote,
+    };
+  }
+  return client;
 }
 
 function canonicalPgnHash(pgn: string): string {
@@ -345,6 +538,15 @@ export async function registerGameRoutes(
     }
 
     const query = parsed.data;
+    let normalizedPositionFen: string | null = null;
+    if (query.positionFen && query.positionFen.length > 0) {
+      try {
+        normalizedPositionFen = normalizeFen(query.positionFen).fenNorm;
+      } catch (error) {
+        return reply.status(400).send({ error: String(error) });
+      }
+    }
+
     const whereClauses = ["g.user_id = $1"];
     const params: unknown[] = [request.user!.id];
 
@@ -429,6 +631,18 @@ export async function registerGameRoutes(
             AND gt.game_id = g.id
         )`,
         query.tagId
+      );
+    }
+    if (normalizedPositionFen) {
+      addCondition(
+        `EXISTS (
+          SELECT 1
+          FROM game_positions gp
+          WHERE gp.user_id = $1
+            AND gp.game_id = g.id
+            AND gp.fen_norm = ?
+        )`,
+        normalizedPositionFen
       );
     }
 
@@ -722,11 +936,16 @@ export async function registerGameRoutes(
         [gameId, request.user!.id]
       );
 
+      const rawAnnotations = result.rowCount ? result.rows[0].annotations : {};
+      const rawMoveNotes = result.rowCount ? result.rows[0].move_notes : {};
+      const annotations = normalizeRootAnnotations(rawAnnotations ?? {});
+      const moveNotes = normalizeMoveNotes(rawMoveNotes ?? {});
+
       return {
         gameId,
-        schemaVersion: result.rowCount ? result.rows[0].schema_version : 1,
-        annotations: result.rowCount ? result.rows[0].annotations : {},
-        moveNotes: result.rowCount ? result.rows[0].move_notes : {},
+        schemaVersion: result.rowCount ? Math.max(2, result.rows[0].schema_version) : 2,
+        annotations,
+        moveNotes: toClientMoveNotes(moveNotes),
       };
     }
   );
@@ -753,8 +972,28 @@ export async function registerGameRoutes(
         return reply.status(404).send({ error: "Game not found" });
       }
 
-      const schemaVersion = parsed.data.schemaVersion ?? 1;
-      const moveNotes = parsed.data.moveNotes ?? {};
+      const schemaVersion = parsed.data.schemaVersion ?? 2;
+      const rootValidation = RootAnnotationsSchema.safeParse(parsed.data.annotations ?? {});
+      if (!rootValidation.success) {
+        return reply.status(400).send({
+          error: "Invalid root annotation fields",
+          details: rootValidation.error.flatten(),
+        });
+      }
+
+      const rawMoveNotes = parsed.data.moveNotes ?? {};
+      for (const [ply, rawValue] of Object.entries(rawMoveNotes)) {
+        const moveNoteValidation = MoveNoteSchema.safeParse(rawValue);
+        if (!moveNoteValidation.success) {
+          return reply.status(400).send({
+            error: `Invalid move note at ply ${ply}`,
+            details: moveNoteValidation.error.flatten(),
+          });
+        }
+      }
+
+      const annotations = normalizeRootAnnotations(parsed.data.annotations ?? {});
+      const moveNotes = normalizeMoveNotes(rawMoveNotes);
 
       await pool.query(
         `INSERT INTO user_annotations (user_id, game_id, schema_version, annotations, move_notes)
@@ -768,17 +1007,17 @@ export async function registerGameRoutes(
         [
           request.user!.id,
           gameId,
-          schemaVersion,
-          JSON.stringify(parsed.data.annotations),
+          Math.max(2, schemaVersion),
+          JSON.stringify(annotations),
           JSON.stringify(moveNotes),
         ]
       );
 
       return {
         gameId,
-        schemaVersion,
-        annotations: parsed.data.annotations,
-        moveNotes,
+        schemaVersion: Math.max(2, schemaVersion),
+        annotations,
+        moveNotes: toClientMoveNotes(moveNotes),
       };
     }
   );
@@ -806,4 +1045,3 @@ export async function registerGameRoutes(
     }
   );
 }
-

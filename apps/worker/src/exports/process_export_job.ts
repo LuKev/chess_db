@@ -48,6 +48,205 @@ function toId(value: number | string): number {
   return Number(value);
 }
 
+type NormalizedMoveNote = {
+  comment?: string;
+  nags: number[];
+  highlights: string[];
+  arrows: string[];
+  variationNote?: string;
+};
+
+function splitPgnSections(pgnText: string): { headers: string; moveText: string } {
+  const normalized = pgnText.replace(/\r\n/g, "\n").trim();
+  const divider = normalized.indexOf("\n\n");
+  if (divider < 0) {
+    return {
+      headers: "",
+      moveText: normalized,
+    };
+  }
+  return {
+    headers: normalized.slice(0, divider).trim(),
+    moveText: normalized.slice(divider + 2).trim(),
+  };
+}
+
+function tokenizeMovetext(moveText: string): string[] {
+  const tokens: string[] = [];
+  let index = 0;
+  while (index < moveText.length) {
+    const char = moveText[index];
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+    if (char === "{") {
+      let end = index + 1;
+      while (end < moveText.length && moveText[end] !== "}") {
+        end += 1;
+      }
+      tokens.push(moveText.slice(index, Math.min(end + 1, moveText.length)));
+      index = Math.min(end + 1, moveText.length);
+      continue;
+    }
+    if (char === "(" || char === ")") {
+      tokens.push(char);
+      index += 1;
+      continue;
+    }
+
+    let end = index + 1;
+    while (
+      end < moveText.length &&
+      !/\s/.test(moveText[end]) &&
+      moveText[end] !== "{" &&
+      moveText[end] !== "}" &&
+      moveText[end] !== "(" &&
+      moveText[end] !== ")"
+    ) {
+      end += 1;
+    }
+    tokens.push(moveText.slice(index, end));
+    index = end;
+  }
+  return tokens;
+}
+
+function isMoveNumberToken(token: string): boolean {
+  return /^\d+\.(\.\.)?$/.test(token);
+}
+
+function isResultToken(token: string): boolean {
+  return token === "1-0" || token === "0-1" || token === "1/2-1/2" || token === "*";
+}
+
+function isNagToken(token: string): boolean {
+  return /^\$\d+$/.test(token);
+}
+
+function normalizeMoveNotes(
+  moveNotes: Record<string, unknown> | null
+): Record<string, NormalizedMoveNote> {
+  if (!moveNotes) {
+    return {};
+  }
+  const normalized: Record<string, NormalizedMoveNote> = {};
+  for (const [ply, value] of Object.entries(moveNotes)) {
+    if (!/^\d+$/.test(ply) || !value || typeof value !== "object") {
+      continue;
+    }
+    const raw = value as Record<string, unknown>;
+    const nagsRaw = Array.isArray(raw.nags)
+      ? raw.nags
+      : Array.isArray(raw.glyphs)
+        ? raw.glyphs
+        : [];
+    const nags = nagsRaw
+      .map((nag) =>
+        typeof nag === "number" && Number.isInteger(nag) && nag >= 1 && nag <= 255 ? nag : null
+      )
+      .filter((nag): nag is number => nag !== null)
+      .slice(0, 32);
+    const highlights = Array.isArray(raw.highlights)
+      ? raw.highlights
+          .map((sq) => (typeof sq === "string" ? sq.trim().toUpperCase() : ""))
+          .filter((sq) => /^[A-H][1-8]$/.test(sq))
+          .slice(0, 64)
+      : [];
+    const arrows = Array.isArray(raw.arrows)
+      ? raw.arrows
+          .map((arrow) => (typeof arrow === "string" ? arrow.trim().toUpperCase() : ""))
+          .filter((arrow) => /^[A-H][1-8][A-H][1-8]$/.test(arrow))
+          .slice(0, 64)
+      : [];
+    const comment =
+      typeof raw.comment === "string" && raw.comment.trim().length > 0
+        ? raw.comment.trim()
+        : undefined;
+    const variationNote =
+      typeof raw.variationNote === "string" && raw.variationNote.trim().length > 0
+        ? raw.variationNote.trim()
+        : undefined;
+
+    if (!comment && !variationNote && nags.length === 0 && highlights.length === 0 && arrows.length === 0) {
+      continue;
+    }
+    normalized[ply] = {
+      comment,
+      nags,
+      highlights,
+      arrows,
+      variationNote,
+    };
+  }
+  return normalized;
+}
+
+function rootAnnotationChunks(
+  annotations: Record<string, unknown> | null
+): { chunks: string[]; unsupportedFallback: Record<string, unknown> } {
+  if (!annotations) {
+    return { chunks: [], unsupportedFallback: {} };
+  }
+
+  const chunks: string[] = [];
+  const unsupportedFallback: Record<string, unknown> = {};
+
+  if (typeof annotations.comment === "string" && annotations.comment.trim().length > 0) {
+    chunks.push(`{${annotations.comment.trim()}}`);
+  }
+
+  const highlights = Array.isArray(annotations.highlights)
+    ? annotations.highlights
+        .map((value) => (typeof value === "string" ? value.trim().toUpperCase() : ""))
+        .filter((value) => /^[A-H][1-8]$/.test(value))
+    : [];
+  if (highlights.length > 0) {
+    chunks.push(`{[%csl ${highlights.map((sq) => `Y${sq}`).join(",")}]}`);
+  }
+
+  const arrows = Array.isArray(annotations.arrows)
+    ? annotations.arrows
+        .map((value) => (typeof value === "string" ? value.trim().toUpperCase() : ""))
+        .filter((value) => /^[A-H][1-8][A-H][1-8]$/.test(value))
+    : [];
+  if (arrows.length > 0) {
+    chunks.push(`{[%cal ${arrows.map((arrow) => `G${arrow}`).join(",")}]}`);
+  }
+
+  if (typeof annotations.cursor === "number" && Number.isInteger(annotations.cursor)) {
+    unsupportedFallback.cursor = annotations.cursor;
+  }
+  if (typeof annotations.lineId === "string" && annotations.lineId.trim().length > 0) {
+    unsupportedFallback.lineId = annotations.lineId.trim();
+  }
+
+  return {
+    chunks,
+    unsupportedFallback,
+  };
+}
+
+function moveNoteChunks(note: NormalizedMoveNote, ply: number): string[] {
+  const chunks: string[] = [];
+  if (note.nags.length > 0) {
+    chunks.push(...note.nags.map((nag) => `$${nag}`));
+  }
+  if (note.comment) {
+    chunks.push(`{${note.comment}}`);
+  }
+  if (note.highlights.length > 0) {
+    chunks.push(`{[%csl ${note.highlights.map((sq) => `Y${sq}`).join(",")}]}`);
+  }
+  if (note.arrows.length > 0) {
+    chunks.push(`{[%cal ${note.arrows.map((arrow) => `G${arrow}`).join(",")}]}`);
+  }
+  if (note.variationNote) {
+    chunks.push(`{Variation note (ply ${ply}): ${note.variationNote}}`);
+  }
+  return chunks;
+}
+
 function withAnnotationsComment(
   pgnText: string,
   includeAnnotations: boolean,
@@ -56,78 +255,62 @@ function withAnnotationsComment(
   schemaVersion: number | null
 ): string {
   const trimmed = pgnText.trim();
+  if (!includeAnnotations) {
+    return trimmed;
+  }
   if (
-    !includeAnnotations ||
     ((!annotations || Object.keys(annotations).length === 0) &&
       (!moveNotes || Object.keys(moveNotes).length === 0))
   ) {
     return trimmed;
   }
 
-  const blocks: string[] = [trimmed];
-  const annotationComment = annotations?.comment;
-  if (typeof annotationComment === "string" && annotationComment.trim().length > 0) {
-    blocks.push(`{${annotationComment.trim()}}`);
-  }
+  const normalizedMoveNotes = normalizeMoveNotes(moveNotes);
+  const { headers, moveText } = splitPgnSections(trimmed);
+  const tokens = tokenizeMovetext(moveText);
+  const { chunks: rootChunks, unsupportedFallback } = rootAnnotationChunks(annotations);
 
-  const highlights = Array.isArray(annotations?.highlights)
-    ? (annotations!.highlights as unknown[])
-        .map((value) => (typeof value === "string" ? value.trim().toUpperCase() : ""))
-        .filter((value) => value.length > 0)
-    : [];
-  if (highlights.length > 0) {
-    blocks.push(`{[%csl ${highlights.map((sq) => `Y${sq}`).join(",")}]}`);
-  }
-
-  const arrows = Array.isArray(annotations?.arrows)
-    ? (annotations!.arrows as unknown[])
-        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
-        .filter((value) => value.length >= 4)
-    : [];
-  if (arrows.length > 0) {
-    const cal = arrows
-      .map((arrow) => `${arrow.slice(0, 2).toUpperCase()}${arrow.slice(2, 4).toUpperCase()}`)
-      .map((arrow) => `G${arrow}`)
-      .join(",");
-    blocks.push(`{[%cal ${cal}]}`);
-  }
-
-  const notesEntries = Object.entries(moveNotes ?? {}).sort(
-    (a, b) => Number(a[0]) - Number(b[0])
-  );
-  for (const [ply, rawNote] of notesEntries) {
-    if (!rawNote || typeof rawNote !== "object") {
+  const renderedTokens: string[] = [...rootChunks];
+  let mainlinePly = 0;
+  let variationDepth = 0;
+  for (const token of tokens) {
+    renderedTokens.push(token);
+    if (token === "(") {
+      variationDepth += 1;
       continue;
     }
-    const note = rawNote as { comment?: unknown; glyphs?: unknown };
-    const comment =
-      typeof note.comment === "string" && note.comment.trim().length > 0
-        ? note.comment.trim()
-        : "";
-    const glyphs = Array.isArray(note.glyphs)
-      ? note.glyphs
-          .map((glyph) =>
-            typeof glyph === "number" && Number.isInteger(glyph) ? glyph : null
-          )
-          .filter((glyph): glyph is number => glyph !== null)
-      : [];
+    if (token === ")") {
+      variationDepth = Math.max(0, variationDepth - 1);
+      continue;
+    }
+    if (token.startsWith("{") && token.endsWith("}")) {
+      continue;
+    }
+    if (isMoveNumberToken(token) || isResultToken(token) || isNagToken(token)) {
+      continue;
+    }
+    if (variationDepth > 0) {
+      continue;
+    }
 
-    if (glyphs.length > 0) {
-      blocks.push(`${glyphs.map((glyph) => `$${glyph}`).join(" ")} {Move note at ply ${ply}}`);
+    mainlinePly += 1;
+    const note = normalizedMoveNotes[String(mainlinePly)];
+    if (!note) {
+      continue;
     }
-    if (comment) {
-      blocks.push(`{Move ${ply}: ${comment}}`);
-    }
+    renderedTokens.push(...moveNoteChunks(note, mainlinePly));
   }
 
-  blocks.push(
-    `{ChessDBAnnotations schema=${schemaVersion ?? 1} ${JSON.stringify({
-      annotations: annotations ?? {},
-      moveNotes: moveNotes ?? {},
-    })}}`
-  );
+  if (Object.keys(unsupportedFallback).length > 0) {
+    renderedTokens.push(
+      `{ChessDBAnnotationsUnsupported schema=${schemaVersion ?? 2} ${JSON.stringify(
+        unsupportedFallback
+      )}}`
+    );
+  }
 
-  return blocks.join("\n");
+  const renderedMoveText = renderedTokens.join(" ").replace(/\s+/g, " ").trim();
+  return headers.length > 0 ? `${headers}\n\n${renderedMoveText}` : renderedMoveText;
 }
 
 function buildWhereFromFilter(

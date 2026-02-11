@@ -138,6 +138,11 @@ export async function registerCollectionRoutes(
         return reply.status(400).send({ error: "No updates provided" });
       }
 
+      const hasName = Object.prototype.hasOwnProperty.call(parsed.data, "name");
+      const hasDescription = Object.prototype.hasOwnProperty.call(parsed.data, "description");
+      const nextDescription =
+        parsed.data.description === undefined ? null : parsed.data.description;
+
       const result = await pool.query<{
         id: number | string;
         name: string;
@@ -147,17 +152,12 @@ export async function registerCollectionRoutes(
       }>(
         `UPDATE collections
          SET
-           name = COALESCE($3, name),
-           description = COALESCE($4, description),
+           name = CASE WHEN $5::boolean THEN $3 ELSE name END,
+           description = CASE WHEN $6::boolean THEN $4 ELSE description END,
            updated_at = NOW()
          WHERE id = $1 AND user_id = $2
          RETURNING id, name, description, created_at, updated_at`,
-        [
-          collectionId,
-          request.user!.id,
-          parsed.data.name ?? null,
-          parsed.data.description ?? null,
-        ]
+        [collectionId, request.user!.id, parsed.data.name ?? null, nextDescription, hasName, hasDescription]
       );
 
       if (!result.rowCount) {
@@ -298,4 +298,3 @@ export async function registerCollectionRoutes(
     }
   );
 }
-

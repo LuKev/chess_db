@@ -12,6 +12,16 @@ const CreateTagSchema = z.object({
     .optional(),
 });
 
+const UpdateTagSchema = z.object({
+  name: z.string().trim().min(1).max(64).optional(),
+  color: z
+    .string()
+    .trim()
+    .regex(/^#?[0-9a-fA-F]{6}$/)
+    .nullable()
+    .optional(),
+});
+
 const TagGamesSchema = z.object({
   gameIds: z.array(z.number().int().positive()).min(1).max(10_000),
 });
@@ -139,6 +149,65 @@ export async function registerTagRoutes(
       }
 
       return reply.status(204).send();
+    }
+  );
+
+  app.patch<{ Params: { id: string } }>(
+    "/api/tags/:id",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const tagId = Number(request.params.id);
+      if (!Number.isInteger(tagId) || tagId <= 0) {
+        return reply.status(400).send({ error: "Invalid tag id" });
+      }
+
+      const parsed = UpdateTagSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten(),
+        });
+      }
+      if (Object.keys(parsed.data).length === 0) {
+        return reply.status(400).send({ error: "No updates provided" });
+      }
+
+      const color =
+        parsed.data.color === undefined
+          ? undefined
+          : parsed.data.color === null
+            ? null
+            : parsed.data.color.startsWith("#")
+              ? parsed.data.color
+              : `#${parsed.data.color}`;
+      const hasName = Object.prototype.hasOwnProperty.call(parsed.data, "name");
+      const hasColor = Object.prototype.hasOwnProperty.call(parsed.data, "color");
+
+      const result = await pool.query<{
+        id: number | string;
+        name: string;
+        color: string | null;
+        created_at: Date;
+      }>(
+        `UPDATE tags
+         SET
+           name = CASE WHEN $5::boolean THEN $3 ELSE name END,
+           color = CASE WHEN $6::boolean THEN $4 ELSE color END
+         WHERE id = $1 AND user_id = $2
+         RETURNING id, name, color, created_at`,
+        [tagId, request.user!.id, parsed.data.name ?? null, color ?? null, hasName, hasColor]
+      );
+      if (!result.rowCount) {
+        return reply.status(404).send({ error: "Tag not found" });
+      }
+
+      const row = result.rows[0];
+      return {
+        id: toId(row.id),
+        name: row.name,
+        color: row.color,
+        createdAt: row.created_at.toISOString(),
+      };
     }
   );
 
