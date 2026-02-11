@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { Queue, Worker } from "bullmq";
+import { Queue, Worker, type Job } from "bullmq";
 import { loadWorkerConfig } from "./config.js";
 import { createPool } from "./db.js";
 import {
@@ -94,6 +94,66 @@ const openingBackfillQueueStats = new Queue(OPENING_BACKFILL_QUEUE_NAME, {
 console.log(
   `[worker] started (metrics: http://${config.metricsHost}:${config.metricsPort}/metrics)`
 );
+
+function userIdFromPayload(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const value = (payload as { userId?: unknown }).userId;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return null;
+  }
+  return value;
+}
+
+async function recordDeadLetter(params: {
+  queueName: string;
+  job: Job | undefined;
+  error: unknown;
+}): Promise<void> {
+  if (!params.job) {
+    return;
+  }
+
+  const maxAttempts =
+    typeof params.job.opts.attempts === "number" && params.job.opts.attempts > 0
+      ? params.job.opts.attempts
+      : 1;
+  const attemptsMade = params.job.attemptsMade;
+  if (attemptsMade < maxAttempts) {
+    return;
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO queue_dead_letters (
+        queue_name,
+        job_name,
+        job_id,
+        user_id,
+        payload,
+        attempts_made,
+        max_attempts,
+        failed_reason
+      ) VALUES (
+        $1, $2, $3, $4, $5::jsonb, $6, $7, $8
+      )`,
+      [
+        params.queueName,
+        params.job.name,
+        params.job.id ? String(params.job.id) : null,
+        userIdFromPayload(params.job.data),
+        JSON.stringify(params.job.data ?? {}),
+        attemptsMade,
+        maxAttempts,
+        String(params.error).slice(0, 2000),
+      ]
+    );
+  } catch (insertError) {
+    console.error(`[worker] failed to persist dead-letter event: ${String(insertError)}`);
+    captureException(insertError);
+  }
+}
 
 async function runInstrumentedJob(
   queueName: string,
@@ -205,6 +265,11 @@ importWorker.on("completed", (job) => {
 importWorker.on("failed", (job, error) => {
   console.error(`[worker] failed import job ${job?.id}: ${String(error)}`);
   captureException(error);
+  void recordDeadLetter({
+    queueName: IMPORT_QUEUE_NAME,
+    job,
+    error,
+  });
 });
 
 analysisWorker.on("completed", (job) => {
@@ -214,6 +279,11 @@ analysisWorker.on("completed", (job) => {
 analysisWorker.on("failed", (job, error) => {
   console.error(`[worker] failed analysis job ${job?.id}: ${String(error)}`);
   captureException(error);
+  void recordDeadLetter({
+    queueName: ANALYSIS_QUEUE_NAME,
+    job,
+    error,
+  });
 });
 
 exportWorker.on("completed", (job) => {
@@ -223,6 +293,11 @@ exportWorker.on("completed", (job) => {
 exportWorker.on("failed", (job, error) => {
   console.error(`[worker] failed export job ${job?.id}: ${String(error)}`);
   captureException(error);
+  void recordDeadLetter({
+    queueName: EXPORT_QUEUE_NAME,
+    job,
+    error,
+  });
 });
 
 positionBackfillWorker.on("completed", (job) => {
@@ -232,6 +307,11 @@ positionBackfillWorker.on("completed", (job) => {
 positionBackfillWorker.on("failed", (job, error) => {
   console.error(`[worker] failed position backfill job ${job?.id}: ${String(error)}`);
   captureException(error);
+  void recordDeadLetter({
+    queueName: POSITION_BACKFILL_QUEUE_NAME,
+    job,
+    error,
+  });
 });
 
 openingBackfillWorker.on("completed", (job) => {
@@ -241,6 +321,11 @@ openingBackfillWorker.on("completed", (job) => {
 openingBackfillWorker.on("failed", (job, error) => {
   console.error(`[worker] failed opening backfill job ${job?.id}: ${String(error)}`);
   captureException(error);
+  void recordDeadLetter({
+    queueName: OPENING_BACKFILL_QUEUE_NAME,
+    job,
+    error,
+  });
 });
 
 async function refreshQueueDepthMetrics(): Promise<void> {

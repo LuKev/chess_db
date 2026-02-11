@@ -100,3 +100,11 @@
    - Added Redis-backed auth endpoint brute-force rate limiting knobs (`AUTH_RATE_LIMIT_*`), disabled automatically in `NODE_ENV=test`.
    - Added `Idempotency-Key` support for `POST /api/imports`, `POST /api/analysis`, and `POST /api/exports` with replay-safe 200 responses.
    - Added integration tests for idempotency replay and auth audit logging.
+31. Queue reliability tranche completed (2026-02-11):
+   - Added migration `0007_dead_letters.sql` with `queue_dead_letters` table/indexes.
+   - Queue enqueue path now supports retry/backoff env controls:
+     - `QUEUE_JOB_ATTEMPTS` (default 3)
+     - `QUEUE_JOB_BACKOFF_MS` (default 1000, exponential)
+   - Worker now writes final (post-retry) failed jobs into `queue_dead_letters` for import/analysis/export/backfill queues.
+   - Added tenant-scoped dead-letter inspection API: `GET /api/ops/dead-letters`.
+   - Added integration test coverage for dead-letter listing and user isolation.

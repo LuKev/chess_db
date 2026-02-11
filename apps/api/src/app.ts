@@ -41,6 +41,7 @@ import { registerOpeningRoutes } from "./routes/openings.js";
 import { registerCollectionRoutes } from "./routes/collections.js";
 import { registerTagRoutes } from "./routes/tags.js";
 import { registerBackfillRoutes } from "./routes/backfill.js";
+import { registerOpsRoutes } from "./routes/ops.js";
 import { createApiMetrics, registerApiMetrics } from "./observability/metrics.js";
 import { captureException } from "./observability/sentry.js";
 
@@ -288,6 +289,7 @@ export async function buildApp(
   await registerCollectionRoutes(app, pool);
   await registerTagRoutes(app, pool);
   await registerBackfillRoutes(app, positionBackfillQueue, openingBackfillQueue);
+  await registerOpsRoutes(app, pool);
 
   app.setErrorHandler((error, request, reply) => {
     captureException(error);

@@ -68,6 +68,11 @@ export function createImportQueue(config: AppConfig): ImportQueue {
     async enqueueImport(payload: ImportJobPayload): Promise<void> {
       await queue.add("import", payload, {
         jobId: `import-${payload.importJobId}`,
+        attempts: config.queueJobAttempts,
+        backoff: {
+          type: "exponential",
+          delay: config.queueJobBackoffMs,
+        },
         removeOnComplete: 200,
         removeOnFail: 200,
       });
@@ -91,6 +96,11 @@ export function createAnalysisQueue(config: AppConfig): AnalysisQueue {
     async enqueueAnalysis(payload: AnalysisJobPayload): Promise<void> {
       await queue.add("analyze", payload, {
         jobId: `analysis-${payload.analysisRequestId}`,
+        attempts: config.queueJobAttempts,
+        backoff: {
+          type: "exponential",
+          delay: config.queueJobBackoffMs,
+        },
         removeOnComplete: 200,
         removeOnFail: 200,
       });
@@ -114,6 +124,11 @@ export function createExportQueue(config: AppConfig): ExportQueue {
     async enqueueExport(payload: ExportJobPayload): Promise<void> {
       await queue.add("export", payload, {
         jobId: `export-${payload.exportJobId}`,
+        attempts: config.queueJobAttempts,
+        backoff: {
+          type: "exponential",
+          delay: config.queueJobBackoffMs,
+        },
         removeOnComplete: 200,
         removeOnFail: 200,
       });

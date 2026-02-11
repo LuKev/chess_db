@@ -937,6 +937,69 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(nonOwnerDownload.statusCode).toBe(404);
   });
 
+  it("lists dead-letter queue entries for the owning user", async () => {
+    const userA = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "deadletter-a@example.com",
+        password: "passwordDeadA!",
+      },
+    });
+    const userB = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "deadletter-b@example.com",
+        password: "passwordDeadB!",
+      },
+    });
+    const cookieA = extractCookie(userA.headers["set-cookie"]);
+    const cookieB = extractCookie(userB.headers["set-cookie"]);
+
+    const userRows = await pool.query<{ email: string; id: string | number }>(
+      `SELECT email, id
+       FROM users
+       WHERE email IN ('deadletter-a@example.com', 'deadletter-b@example.com')`
+    );
+    const userAId = Number(userRows.rows.find((row) => row.email === "deadletter-a@example.com")!.id);
+    const userBId = Number(userRows.rows.find((row) => row.email === "deadletter-b@example.com")!.id);
+
+    await pool.query(
+      `INSERT INTO queue_dead_letters (
+        queue_name,
+        job_name,
+        job_id,
+        user_id,
+        payload,
+        attempts_made,
+        max_attempts,
+        failed_reason
+      ) VALUES
+      ('imports', 'import', 'import-123', $1, '{"importJobId":123}'::jsonb, 3, 3, 'boom'),
+      ('analysis', 'analyze', 'analysis-555', $2, '{"analysisRequestId":555}'::jsonb, 3, 3, 'other user')`,
+      [userAId, userBId]
+    );
+
+    const ownerList = await app.inject({
+      method: "GET",
+      url: "/api/ops/dead-letters?page=1&pageSize=10",
+      headers: { cookie: cookieA },
+    });
+    expect(ownerList.statusCode).toBe(200);
+    expect(ownerList.json().total).toBe(1);
+    expect(ownerList.json().items[0].jobId).toBe("import-123");
+
+    const otherList = await app.inject({
+      method: "GET",
+      url: "/api/ops/dead-letters?page=1&pageSize=10",
+      headers: { cookie: cookieB },
+    });
+    expect(otherList.statusCode).toBe(200);
+    expect(otherList.json().total).toBe(1);
+    expect(otherList.json().items[0].jobId).toBe("analysis-555");
+  });
+
   it("supports collections/tags, position search, opening tree, and stored engine lines", async () => {
     const user = await app.inject({
       method: "POST",

@@ -64,6 +64,7 @@ Notes:
    - `ENFORCE_CSRF_ORIGIN_CHECK=true` enforces origin checks for mutating cookie-auth requests.
    - Auth endpoint brute-force limits are configurable via `AUTH_RATE_LIMIT_*` env vars.
    - `POST /api/imports`, `POST /api/analysis`, and `POST /api/exports` support optional `Idempotency-Key` header.
+   - Worker queue retry/backoff is configurable via `QUEUE_JOB_ATTEMPTS` and `QUEUE_JOB_BACKOFF_MS`.
 
 ## Implemented Endpoints (Current)
 
@@ -115,6 +116,8 @@ Notes:
 10. Backfills:
    - `POST /api/backfill/positions`
    - `POST /api/backfill/openings`
+11. Ops:
+   - `GET /api/ops/dead-letters`
 
 Railway deployment helper:
 

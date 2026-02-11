@@ -55,6 +55,8 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(10),
+  QUEUE_JOB_ATTEMPTS: z.coerce.number().int().positive().max(10).default(3),
+  QUEUE_JOB_BACKOFF_MS: z.coerce.number().int().positive().max(60_000).default(1000),
   SMTP_HOST: z.string().trim().optional(),
   SMTP_PORT: z.coerce.number().int().positive().optional(),
   SMTP_USER: z.string().trim().optional(),
@@ -105,6 +107,8 @@ export type AppConfig = {
   authRateLimitPasswordResetIpMax: number;
   authRateLimitPasswordResetEmailMax: number;
   authRateLimitPasswordResetConfirmIpMax: number;
+  queueJobAttempts: number;
+  queueJobBackoffMs: number;
   smtpHost: string | null;
   smtpPort: number | null;
   smtpUser: string | null;
@@ -168,6 +172,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       parsed.data.AUTH_RATE_LIMIT_PASSWORD_RESET_EMAIL_MAX,
     authRateLimitPasswordResetConfirmIpMax:
       parsed.data.AUTH_RATE_LIMIT_PASSWORD_RESET_CONFIRM_IP_MAX,
+    queueJobAttempts: parsed.data.QUEUE_JOB_ATTEMPTS,
+    queueJobBackoffMs: parsed.data.QUEUE_JOB_BACKOFF_MS,
     smtpHost: parsed.data.SMTP_HOST?.trim() ? parsed.data.SMTP_HOST.trim() : null,
     smtpPort: parsed.data.SMTP_PORT ?? null,
     smtpUser: parsed.data.SMTP_USER?.trim() ? parsed.data.SMTP_USER.trim() : null,
