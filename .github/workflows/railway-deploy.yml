@@ -38,10 +38,16 @@ jobs:
         run: npm install -g @railway/cli@3.14.0
 
       - name: Deploy web
-        run: railway up --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web --path-as-root apps/web --ci
+        run: |
+          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web
+          railway up --path-as-root apps/web --ci
 
       - name: Deploy api
-        run: railway up --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service api --path-as-root apps/api --ci
+        run: |
+          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service api
+          railway up --path-as-root apps/api --ci
 
       - name: Deploy worker
-        run: railway up --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker --path-as-root apps/worker --ci
+        run: |
+          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker
+          railway up --path-as-root apps/worker --ci
