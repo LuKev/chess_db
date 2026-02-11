@@ -24,3 +24,7 @@ coverage/
 
 # Logs
 *.log
+
+# Codex workspace files
+AGENTS.md
+NOTES.md
