@@ -117,3 +117,9 @@
      - Applying built-in presets.
      - Copying share links for saved filters (`?sharedFilter=<token>`).
      - Auto-applying shared filter links after sign-in.
+33. Added query planner regression integration tests:
+   - New test file: `apps/api/test/query_planner.integration.test.ts`.
+   - Covers index-backed plans for:
+     - Games metadata eco query.
+     - Position lookup (`game_positions_user_fen_idx`).
+     - Opening tree lookup (`opening_stats_user_position_idx`).
