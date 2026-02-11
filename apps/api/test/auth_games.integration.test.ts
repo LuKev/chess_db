@@ -188,6 +188,61 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(meAfterLogout.statusCode).toBe(401);
   });
 
+  it("supports password reset request and confirm flow", async () => {
+    const registerResponse = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "reset-user@example.com",
+        password: "oldPassword123!",
+      },
+    });
+    expect(registerResponse.statusCode).toBe(201);
+
+    const requestReset = await app.inject({
+      method: "POST",
+      url: "/api/auth/password-reset/request",
+      payload: {
+        email: "reset-user@example.com",
+      },
+    });
+    expect(requestReset.statusCode).toBe(200);
+
+    const resetToken = requestReset.json().resetToken as string;
+    expect(typeof resetToken).toBe("string");
+    expect(resetToken.length).toBeGreaterThanOrEqual(32);
+
+    const confirmReset = await app.inject({
+      method: "POST",
+      url: "/api/auth/password-reset/confirm",
+      payload: {
+        token: resetToken,
+        newPassword: "newPassword456!",
+      },
+    });
+    expect(confirmReset.statusCode).toBe(200);
+
+    const oldLogin = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: {
+        email: "reset-user@example.com",
+        password: "oldPassword123!",
+      },
+    });
+    expect(oldLogin.statusCode).toBe(401);
+
+    const newLogin = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: {
+        email: "reset-user@example.com",
+        password: "newPassword456!",
+      },
+    });
+    expect(newLogin.statusCode).toBe(200);
+  });
+
   it("prevents cross-user game access", async () => {
     const userA = await app.inject({
       method: "POST",
@@ -578,6 +633,7 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
       payload: {
         mode: "ids",
         gameIds: [1, 2, 3],
+        includeAnnotations: true,
       },
     });
 
@@ -608,6 +664,18 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(exportStatus.statusCode).toBe(200);
     expect(exportStatus.json().status).toBe("queued");
+
+    const includeFlags = await pool.query<{
+      include_annotations: boolean;
+    }>(
+      `SELECT include_annotations
+       FROM export_jobs
+       WHERE user_id = (SELECT id FROM users WHERE email = 'export-user@example.com')
+       ORDER BY id ASC`
+    );
+
+    expect(includeFlags.rows[0].include_annotations).toBe(true);
+    expect(includeFlags.rows[1].include_annotations).toBe(false);
   });
 
   it("downloads completed export artifacts for the owning user", async () => {

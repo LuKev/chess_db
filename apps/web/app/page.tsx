@@ -102,6 +102,21 @@ type ExportJob = {
   updatedAt: string;
 };
 
+type MoveNode = {
+  notation?: {
+    notation?: string;
+  };
+  variations?: unknown[];
+};
+
+type NotationLine = {
+  id: string;
+  label: string;
+  moves: string[];
+  depth: number;
+  anchorPly: number;
+};
+
 function apiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
 }
@@ -161,33 +176,115 @@ async function fetchText(path: string, init: RequestInit = {}): Promise<{
   };
 }
 
-function extractMainlineSan(moveTree: Record<string, unknown>): string[] {
+function isMoveNode(value: unknown): value is MoveNode {
+  return Boolean(value) && typeof value === "object";
+}
+
+function extractSansFromMoves(moves: unknown[]): string[] {
+  const sans: string[] = [];
+  for (const move of moves) {
+    if (!isMoveNode(move)) {
+      continue;
+    }
+    const san = move.notation?.notation;
+    if (typeof san === "string" && san.trim().length > 0) {
+      sans.push(san.trim());
+    }
+  }
+  return sans;
+}
+
+function extractNotationLines(moveTree: Record<string, unknown>): NotationLine[] {
   const direct = moveTree.mainline;
-  if (
-    Array.isArray(direct) &&
-    direct.every((value) => typeof value === "string")
-  ) {
-    return direct as string[];
+  if (Array.isArray(direct) && direct.every((value) => typeof value === "string")) {
+    return [
+      {
+        id: "mainline",
+        label: "Mainline",
+        moves: direct as string[],
+        depth: 0,
+        anchorPly: 0,
+      },
+    ];
   }
 
-  const moves = moveTree.moves;
-  if (!Array.isArray(moves)) {
+  const rootMoves = moveTree.moves;
+  if (!Array.isArray(rootMoves)) {
     return [];
   }
 
-  const sans: string[] = [];
-  for (const move of moves) {
-    if (!move || typeof move !== "object") {
-      continue;
-    }
+  const rootSans = extractSansFromMoves(rootMoves);
+  const lines: NotationLine[] = [
+    {
+      id: "mainline",
+      label: "Mainline",
+      moves: rootSans,
+      depth: 0,
+      anchorPly: 0,
+    },
+  ];
 
-    const notation = (move as { notation?: { notation?: string } }).notation;
-    if (notation?.notation) {
-      sans.push(notation.notation);
+  let counter = 1;
+
+  const walkVariations = (moves: unknown[], prefixSans: string[], depth: number): void => {
+    const mainSans = extractSansFromMoves(moves);
+
+    for (let moveIndex = 0; moveIndex < moves.length; moveIndex += 1) {
+      const move = moves[moveIndex];
+      if (!isMoveNode(move) || !Array.isArray(move.variations)) {
+        continue;
+      }
+
+      for (const variation of move.variations) {
+        if (!Array.isArray(variation)) {
+          continue;
+        }
+
+        const variationSans = extractSansFromMoves(variation);
+        if (variationSans.length === 0) {
+          continue;
+        }
+
+        const anchorSans = [...prefixSans, ...mainSans.slice(0, moveIndex)];
+        const lineMoves = [...anchorSans, ...variationSans];
+        const lineId = `var-${counter}`;
+        lines.push({
+          id: lineId,
+          label: `Variation ${counter} (ply ${anchorSans.length + 1})`,
+          moves: lineMoves,
+          depth,
+          anchorPly: anchorSans.length,
+        });
+        counter += 1;
+
+        walkVariations(variation, anchorSans, depth + 1);
+      }
     }
+  };
+
+  walkVariations(rootMoves, [], 1);
+  return lines;
+}
+
+function parseAnnotationStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim().toLowerCase() : ""))
+      .filter((item) => item.length > 0);
   }
 
-  return sans;
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter((item) => item.length > 0);
+  }
+
+  return [];
+}
+
+function asAnnotationInput(value: unknown): string {
+  return parseAnnotationStringList(value).join(", ");
 }
 
 function buildFenHistory(startingFen: string | null, sans: string[]): string[] {
@@ -228,7 +325,22 @@ function fenToBoard(fen: string): string[][] {
 }
 
 function pieceToSymbol(piece: string): string {
-  return piece || "";
+  const map: Record<string, string> = {
+    p: "♟",
+    r: "♜",
+    n: "♞",
+    b: "♝",
+    q: "♛",
+    k: "♚",
+    P: "♙",
+    R: "♖",
+    N: "♘",
+    B: "♗",
+    Q: "♕",
+    K: "♔",
+  };
+
+  return map[piece] ?? "";
 }
 
 export default function Home() {
@@ -239,8 +351,11 @@ export default function Home() {
 
   const [player, setPlayer] = useState("");
   const [eco, setEco] = useState("");
+  const [eventFilter, setEventFilter] = useState("");
+  const [siteFilter, setSiteFilter] = useState("");
   const [result, setResult] = useState("");
   const [timeControl, setTimeControl] = useState("");
+  const [rated, setRated] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [sort, setSort] = useState("date_desc");
@@ -253,11 +368,15 @@ export default function Home() {
   const [selectedGame, setSelectedGame] = useState<GameDetail | null>(null);
   const [viewerStatus, setViewerStatus] = useState("Select a game to open viewer");
   const [pgnText, setPgnText] = useState("");
+  const [notationLines, setNotationLines] = useState<NotationLine[]>([]);
+  const [activeLineId, setActiveLineId] = useState("mainline");
   const [notationSans, setNotationSans] = useState<string[]>([]);
   const [fenHistory, setFenHistory] = useState<string[]>([]);
   const [cursor, setCursor] = useState(0);
   const [autoplay, setAutoplay] = useState(false);
   const [annotationText, setAnnotationText] = useState("");
+  const [annotationHighlightsInput, setAnnotationHighlightsInput] = useState("");
+  const [annotationArrowsInput, setAnnotationArrowsInput] = useState("");
   const [annotationStatus, setAnnotationStatus] = useState("No annotations loaded");
 
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -278,6 +397,7 @@ export default function Home() {
 
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [exportStatus, setExportStatus] = useState("Sign in to create exports");
+  const [includeExportAnnotations, setIncludeExportAnnotations] = useState(false);
 
   const pageCount = useMemo(() => {
     if (!games) {
@@ -288,6 +408,27 @@ export default function Home() {
 
   const currentFen = fenHistory[Math.min(cursor, Math.max(0, fenHistory.length - 1))] ?? null;
   const board = currentFen ? fenToBoard(currentFen) : null;
+  const highlightedSquares = useMemo(
+    () => new Set(parseAnnotationStringList(annotationHighlightsInput)),
+    [annotationHighlightsInput]
+  );
+  const annotationArrows = useMemo(
+    () => parseAnnotationStringList(annotationArrowsInput),
+    [annotationArrowsInput]
+  );
+
+  function applyNotationLine(
+    startingFen: string | null,
+    line: NotationLine,
+    requestedCursor = 0
+  ): void {
+    const history = buildFenHistory(startingFen, line.moves);
+    setActiveLineId(line.id);
+    setNotationSans(line.moves);
+    setFenHistory(history);
+    const maxCursor = Math.max(0, history.length - 1);
+    setCursor(Math.min(Math.max(0, requestedCursor), maxCursor));
+  }
 
   async function refreshSession(): Promise<void> {
     const response = await fetchJson<{ user: User }>("/api/auth/me", {
@@ -307,6 +448,14 @@ export default function Home() {
     setSavedFilters([]);
     setSelectedGame(null);
     setSelectedGameId(null);
+    setNotationLines([]);
+    setActiveLineId("mainline");
+    setNotationSans([]);
+    setFenHistory([]);
+    setCursor(0);
+    setAnnotationText("");
+    setAnnotationHighlightsInput("");
+    setAnnotationArrowsInput("");
     setAuthMessage("Not signed in");
   }
 
@@ -323,8 +472,11 @@ export default function Home() {
       sort,
       player,
       eco,
+      event: eventFilter,
+      site: siteFilter,
       result,
       timeControl,
+      rated,
       fromDate,
       toDate,
     });
@@ -366,13 +518,18 @@ export default function Home() {
     }
 
     const game = gameResponse.data;
-    const sans = extractMainlineSan(game.moveTree);
-    const history = buildFenHistory(game.startingFen, sans);
+    const lines = extractNotationLines(game.moveTree);
+    const defaultLine: NotationLine = lines[0] ?? {
+      id: "mainline",
+      label: "Mainline",
+      moves: [],
+      depth: 0,
+      anchorPly: 0,
+    };
 
     setSelectedGame(game);
-    setNotationSans(sans);
-    setFenHistory(history);
-    setCursor(0);
+    setNotationLines(lines);
+    applyNotationLine(game.startingFen, defaultLine, 0);
     setAutoplay(false);
     setViewerStatus(`Viewing game #${game.id}: ${game.white} vs ${game.black}`);
 
@@ -394,11 +551,22 @@ export default function Home() {
     );
 
     if (annotations.status === 200 && "annotations" in annotations.data) {
-      const comment = annotations.data.annotations.comment;
+      const saved = annotations.data.annotations;
+      const comment = saved.comment;
+      const savedLineId = typeof saved.lineId === "string" ? saved.lineId : defaultLine.id;
+      const savedCursor = typeof saved.cursor === "number" ? saved.cursor : 0;
+      const savedLine =
+        lines.find((line) => line.id === savedLineId) ?? defaultLine;
+
+      applyNotationLine(game.startingFen, savedLine, savedCursor);
       setAnnotationText(typeof comment === "string" ? comment : "");
+      setAnnotationHighlightsInput(asAnnotationInput(saved.highlights));
+      setAnnotationArrowsInput(asAnnotationInput(saved.arrows));
       setAnnotationStatus("Annotations loaded");
     } else {
       setAnnotationText("");
+      setAnnotationHighlightsInput("");
+      setAnnotationArrowsInput("");
       setAnnotationStatus("No annotations found");
     }
   }
@@ -416,6 +584,9 @@ export default function Home() {
           annotations: {
             comment: annotationText,
             cursor,
+            lineId: activeLineId,
+            highlights: parseAnnotationStringList(annotationHighlightsInput),
+            arrows: parseAnnotationStringList(annotationArrowsInput),
           },
         }),
       }
@@ -639,8 +810,11 @@ export default function Home() {
         query: {
           player,
           eco,
+          event: eventFilter,
+          site: siteFilter,
           result,
           timeControl,
+          rated,
           fromDate,
           toDate,
           sort,
@@ -826,11 +1000,15 @@ export default function Home() {
         query: {
           player,
           eco,
+          event: eventFilter,
+          site: siteFilter,
           result,
           timeControl,
+          rated,
           fromDate,
           toDate,
         },
+        includeAnnotations: includeExportAnnotations,
       }),
     });
 
@@ -845,13 +1023,24 @@ export default function Home() {
     await refreshExports();
   }
 
+  function selectNotationLine(line: NotationLine): void {
+    if (!selectedGame) {
+      return;
+    }
+    setAutoplay(false);
+    applyNotationLine(selectedGame.startingFen, line, 0);
+  }
+
   function applySavedFilter(savedFilter: SavedFilter): void {
     const query = savedFilter.query;
 
     setPlayer(String(query.player ?? ""));
     setEco(String(query.eco ?? ""));
+    setEventFilter(String(query.event ?? ""));
+    setSiteFilter(String(query.site ?? ""));
     setResult(String(query.result ?? ""));
     setTimeControl(String(query.timeControl ?? ""));
+    setRated(String(query.rated ?? ""));
     setFromDate(String(query.fromDate ?? ""));
     setToDate(String(query.toDate ?? ""));
     setSort(String(query.sort ?? "date_desc"));
@@ -988,12 +1177,27 @@ export default function Home() {
         <form className="filters" onSubmit={onFilterSubmit}>
           <input placeholder="Player" value={player} onChange={(event) => setPlayer(event.target.value)} />
           <input placeholder="ECO" value={eco} onChange={(event) => setEco(event.target.value)} />
+          <input
+            placeholder="Event"
+            value={eventFilter}
+            onChange={(event) => setEventFilter(event.target.value)}
+          />
+          <input
+            placeholder="Site"
+            value={siteFilter}
+            onChange={(event) => setSiteFilter(event.target.value)}
+          />
           <input placeholder="Result" value={result} onChange={(event) => setResult(event.target.value)} />
           <input
             placeholder="Time control"
             value={timeControl}
             onChange={(event) => setTimeControl(event.target.value)}
           />
+          <select value={rated} onChange={(event) => setRated(event.target.value)}>
+            <option value="">Rated/Unrated</option>
+            <option value="true">Rated</option>
+            <option value="false">Unrated</option>
+          </select>
           <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
           <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
           <select value={sort} onChange={(event) => setSort(event.target.value)}>
@@ -1107,14 +1311,19 @@ export default function Home() {
               <div className="board">
                 {board.map((rank, rankIndex) => (
                   <div key={`rank-${rankIndex}`} className="board-rank">
-                    {rank.map((piece, fileIndex) => (
-                      <div
-                        key={`sq-${rankIndex}-${fileIndex}`}
-                        className={`square ${(rankIndex + fileIndex) % 2 === 0 ? "light" : "dark"}`}
-                      >
-                        {pieceToSymbol(piece)}
-                      </div>
-                    ))}
+                    {rank.map((piece, fileIndex) => {
+                      const squareName = `${"abcdefgh"[fileIndex]}${8 - rankIndex}`;
+                      const isMarked = highlightedSquares.has(squareName.toLowerCase());
+                      return (
+                        <div
+                          key={`sq-${rankIndex}-${fileIndex}`}
+                          className={`square ${(rankIndex + fileIndex) % 2 === 0 ? "light" : "dark"} ${isMarked ? "marked" : ""}`}
+                          title={squareName}
+                        >
+                          {pieceToSymbol(piece)}
+                        </div>
+                      );
+                    })}
                   </div>
                 ))}
               </div>
@@ -1124,6 +1333,9 @@ export default function Home() {
               <p className="muted">
                 Move index: {cursor}/{Math.max(0, fenHistory.length - 1)}
               </p>
+              <p className="muted">
+                Active line: {notationLines.find((line) => line.id === activeLineId)?.label ?? "Mainline"}
+              </p>
               <label>
                 Notes
                 <textarea
@@ -1132,6 +1344,23 @@ export default function Home() {
                   onChange={(event) => setAnnotationText(event.target.value)}
                 />
               </label>
+              <label>
+                Highlight Squares (comma-separated, e.g. e4, d5)
+                <input
+                  value={annotationHighlightsInput}
+                  onChange={(event) => setAnnotationHighlightsInput(event.target.value)}
+                />
+              </label>
+              <label>
+                Arrows (comma-separated, e.g. e2e4, g1f3)
+                <input
+                  value={annotationArrowsInput}
+                  onChange={(event) => setAnnotationArrowsInput(event.target.value)}
+                />
+              </label>
+              {annotationArrows.length > 0 ? (
+                <p className="muted">Arrows: {annotationArrows.join(", ")}</p>
+              ) : null}
               <div className="button-row">
                 <button onClick={() => void saveAnnotations()} disabled={!selectedGameId}>
                   Save Notes
@@ -1141,6 +1370,19 @@ export default function Home() {
             </div>
 
             <div>
+              <h3>Lines</h3>
+              <div className="line-list">
+                {notationLines.map((line) => (
+                  <button
+                    key={line.id}
+                    className={activeLineId === line.id ? "active" : ""}
+                    style={{ marginLeft: `${line.depth * 12}px` }}
+                    onClick={() => selectNotationLine(line)}
+                  >
+                    {line.label} ({line.moves.length} ply)
+                  </button>
+                ))}
+              </div>
               <h3>Notation</h3>
               <div className="notation-list">
                 {notationSans.map((san, index) => (
@@ -1267,9 +1509,20 @@ export default function Home() {
       <section className="card">
         <div className="section-head">
           <h2>Exports</h2>
-          <button onClick={() => void createExportByCurrentFilter()} disabled={!user}>
-            Export Current Filter
-          </button>
+          <div className="button-row">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={includeExportAnnotations}
+                onChange={(event) => setIncludeExportAnnotations(event.target.checked)}
+                disabled={!user}
+              />
+              Include annotations
+            </label>
+            <button onClick={() => void createExportByCurrentFilter()} disabled={!user}>
+              Export Current Filter
+            </button>
+          </div>
         </div>
         <p className="muted">{exportStatus}</p>
         <div className="table-wrap">

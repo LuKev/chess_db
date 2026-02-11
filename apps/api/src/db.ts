@@ -12,6 +12,7 @@ export async function resetDatabase(pool: Pool): Promise<void> {
   await pool.query(
     `TRUNCATE TABLE
       import_errors,
+      password_reset_tokens,
       export_jobs,
       engine_requests,
       user_annotations,

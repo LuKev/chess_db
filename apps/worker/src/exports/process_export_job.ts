@@ -8,6 +8,12 @@ type ProcessExportJobParams = {
   userId: number;
 };
 
+type ExportPgnRow = {
+  game_id: number | string;
+  pgn_text: string;
+  annotations: Record<string, unknown> | null;
+};
+
 type FilterQuery = {
   player?: string;
   eco?: string;
@@ -26,6 +32,23 @@ function toId(value: number | string): number {
     return value;
   }
   return Number(value);
+}
+
+function withAnnotationsComment(
+  pgnText: string,
+  includeAnnotations: boolean,
+  annotations: Record<string, unknown> | null
+): string {
+  const trimmed = pgnText.trim();
+  if (
+    !includeAnnotations ||
+    !annotations ||
+    (typeof annotations === "object" && Object.keys(annotations).length === 0)
+  ) {
+    return trimmed;
+  }
+
+  return `${trimmed}\n; ChessDBAnnotations ${JSON.stringify(annotations)}`;
 }
 
 function buildWhereFromFilter(
@@ -77,8 +100,9 @@ export async function processExportJob(
     mode: "ids" | "query";
     game_ids: number[] | null;
     filter_query: FilterQuery | null;
+    include_annotations: boolean;
   }>(
-    `SELECT id, user_id, mode, game_ids, filter_query
+    `SELECT id, user_id, mode, game_ids, filter_query, include_annotations
      FROM export_jobs
      WHERE id = $1`,
     [params.exportJobId]
@@ -101,15 +125,23 @@ export async function processExportJob(
   );
 
   try {
-    let pgnRows: Array<{ pgn_text: string }> = [];
+    let pgnRows: ExportPgnRow[] = [];
+
+    const annotationSelect = job.include_annotations
+      ? "ua.annotations AS annotations"
+      : "NULL::jsonb AS annotations";
+    const annotationJoin = job.include_annotations
+      ? "LEFT JOIN user_annotations ua ON ua.game_id = g.id AND ua.user_id = $1"
+      : "";
 
     if (job.mode === "ids") {
       const ids = job.game_ids ?? [];
       if (ids.length > 0) {
-        const result = await params.pool.query<{ pgn_text: string }>(
-          `SELECT gp.pgn_text
+        const result = await params.pool.query<ExportPgnRow>(
+          `SELECT g.id AS game_id, gp.pgn_text, ${annotationSelect}
            FROM games g
            JOIN game_pgn gp ON gp.game_id = g.id
+           ${annotationJoin}
            WHERE g.user_id = $1
              AND g.id = ANY($2::bigint[])
            ORDER BY g.id ASC`,
@@ -123,10 +155,11 @@ export async function processExportJob(
         params.userId,
         filterQuery
       );
-      const result = await params.pool.query<{ pgn_text: string }>(
-        `SELECT gp.pgn_text
+      const result = await params.pool.query<ExportPgnRow>(
+        `SELECT g.id AS game_id, gp.pgn_text, ${annotationSelect}
          FROM games g
          JOIN game_pgn gp ON gp.game_id = g.id
+         ${annotationJoin}
          WHERE ${whereSql}
          ORDER BY g.id ASC`,
         whereParams
@@ -134,7 +167,11 @@ export async function processExportJob(
       pgnRows = result.rows;
     }
 
-    const exportText = pgnRows.map((row) => row.pgn_text.trim()).join("\n\n");
+    const exportText = pgnRows
+      .map((row) =>
+        withAnnotationsComment(row.pgn_text, job.include_annotations, row.annotations)
+      )
+      .join("\n\n");
     const outputObjectKey = `exports/user-${params.userId}/job-${params.exportJobId}.pgn`;
 
     await params.storage.putObject({

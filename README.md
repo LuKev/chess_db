@@ -55,10 +55,15 @@ Notes:
    - `POST /api/auth/login`
    - `GET /api/auth/me`
    - `POST /api/auth/logout`
+   - `POST /api/auth/password-reset/request`
+   - `POST /api/auth/password-reset/confirm`
 2. Games:
    - `POST /api/games`
    - `GET /api/games`
    - `GET /api/games/:id`
+   - `GET /api/games/:id/pgn`
+   - `GET /api/games/:id/annotations`
+   - `PUT /api/games/:id/annotations`
 3. Filters:
    - `POST /api/filters`
    - `GET /api/filters`
@@ -70,11 +75,13 @@ Notes:
 5. Analysis:
    - `POST /api/analysis`
    - `GET /api/analysis/:id`
+   - `GET /api/analysis/:id/stream`
    - `POST /api/analysis/:id/cancel`
 6. Export:
    - `POST /api/exports`
    - `GET /api/exports`
    - `GET /api/exports/:id`
+   - `GET /api/exports/:id/download`
 
 Railway deployment helper:
 
