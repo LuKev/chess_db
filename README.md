@@ -11,8 +11,8 @@ Planning docs:
 ## Monorepo Layout
 
 1. `apps/web`: Next.js frontend.
-2. `apps/api`: Fastify API.
-3. `apps/worker`: background worker placeholder.
+2. `apps/api`: Fastify API (`auth`, `games`, `imports`, `analysis`, `saved filters`, migrations).
+3. `apps/worker`: queue worker (`imports`, `analysis` with Stockfish).
 
 ## Local Setup
 
@@ -28,10 +28,53 @@ Commands:
 cp .env.example .env
 docker compose up -d
 npm install
+npm run migrate:api
 npm run dev:api
 npm run dev:web
 npm run dev:worker
 ```
+
+Validation commands:
+
+```bash
+npm run lint
+npm run test
+npm run typecheck
+```
+
+Notes:
+
+1. API migrations auto-run at startup when `AUTO_MIGRATE=true`.
+2. API integration tests require `DATABASE_URL` to be set (CI sets this in `.github/workflows/ci.yml`).
+3. Local worker analysis needs a `stockfish` binary on PATH (`brew install stockfish` on macOS).
+
+## Implemented Endpoints (Current)
+
+1. Auth:
+   - `POST /api/auth/register`
+   - `POST /api/auth/login`
+   - `GET /api/auth/me`
+   - `POST /api/auth/logout`
+2. Games:
+   - `POST /api/games`
+   - `GET /api/games`
+   - `GET /api/games/:id`
+3. Filters:
+   - `POST /api/filters`
+   - `GET /api/filters`
+   - `DELETE /api/filters/:id`
+4. Imports:
+   - `POST /api/imports` (multipart `.pgn` / `.pgn.zst`)
+   - `GET /api/imports`
+   - `GET /api/imports/:id`
+5. Analysis:
+   - `POST /api/analysis`
+   - `GET /api/analysis/:id`
+   - `POST /api/analysis/:id/cancel`
+6. Export:
+   - `POST /api/exports`
+   - `GET /api/exports`
+   - `GET /api/exports/:id`
 
 Railway deployment helper:
 

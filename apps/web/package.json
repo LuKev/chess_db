@@ -6,7 +6,9 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p ${PORT:-3000}",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint app next.config.ts",
+    "test": "node --test"
   },
   "dependencies": {
     "next": "^15.5.2",
@@ -20,4 +22,3 @@
     "typescript": "^5.9.2"
   }
 }
-
