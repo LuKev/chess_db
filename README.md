@@ -76,6 +76,8 @@ Notes:
    - `GET /api/games/:id/pgn`
    - `GET /api/games/:id/annotations`
    - `PUT /api/games/:id/annotations`
+   - `GET /api/games/:id/engine-lines`
+   - `DELETE /api/engine-lines/:id`
 3. Filters:
    - `POST /api/filters`
    - `GET /api/filters`
@@ -94,6 +96,20 @@ Notes:
    - `GET /api/exports`
    - `GET /api/exports/:id`
    - `GET /api/exports/:id/download`
+7. Search and Openings:
+   - `POST /api/search/position`
+   - `POST /api/search/position/material`
+   - `GET /api/openings/tree`
+8. Engine Lines:
+   - `POST /api/analysis/store`
+9. Collections and Tags:
+   - `POST/GET/PATCH/DELETE /api/collections`
+   - `POST/DELETE /api/collections/:id/games`
+   - `POST/GET/DELETE /api/tags`
+   - `POST/DELETE /api/games/:id/tags/:tagId`
+10. Backfills:
+   - `POST /api/backfill/positions`
+   - `POST /api/backfill/openings`
 
 Railway deployment helper:
 

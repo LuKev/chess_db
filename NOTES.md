@@ -47,3 +47,27 @@
    - `api` and `worker` now require S3-related env vars at boot (`S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`) and `api` also requires `SESSION_SECRET`.
    - Missing these variables causes immediate startup crash on Railway.
    - Current Railway production was set with placeholder S3 credentials to restore service boot; replace with real object-storage credentials for import/export to work correctly.
+19. ChessBase-like feature expansion landed via migration `0005_chessbase_features.sql`:
+   - Added `game_positions`, `opening_stats`, `engine_lines`, `collections`, `collection_games`, `tags`, `game_tags`.
+   - Upgraded `user_annotations` with `schema_version` and `move_notes`.
+   - Extended `games` with `canonical_pgn_hash`, `white_elo`, `black_elo`.
+   - Extended `import_jobs` with strict dedupe mode + per-reason duplicate counters.
+20. Import pipeline now indexes each game position and opening transitions during ingest:
+   - Worker writes `game_positions` and incremental `opening_stats` from mainline SAN.
+   - Strict duplicate mode is supported through `POST /api/imports?strictDuplicate=true`, with diagnostics for `duplicate_by_moves` and `duplicate_by_canonical`.
+21. New API feature surface implemented:
+   - Position search: `POST /api/search/position`, `POST /api/search/position/material`.
+   - Opening explorer: `GET /api/openings/tree`.
+   - Engine line persistence: `POST /api/analysis/store`, `GET /api/games/:id/engine-lines`, `DELETE /api/engine-lines/:id`.
+   - Collections/tags CRUD and assignment endpoints, including `POST/DELETE /api/games/:id/tags/:tagId`.
+   - Backfill jobs: `POST /api/backfill/positions`, `POST /api/backfill/openings`.
+22. Worker now processes two new idempotent backfill queues:
+   - `position_backfill` fills missing `game_positions` and opening aggregates.
+   - `opening_aggregate_backfill` rebuilds `opening_stats` from indexed positions.
+23. Production auth/storage hardening added:
+   - API startup validates same-site production topology (`PUBLIC_API_ORIGIN`, `PUBLIC_WEB_ORIGIN`, `CORS_ORIGIN`) when `ENFORCE_PRODUCTION_TOPOLOGY=true`.
+   - API and worker now perform eager S3 bucket validation at startup (`ensureBucket`) to fail fast on invalid credentials.
+   - Password reset now supports real SMTP email delivery (via Nodemailer); production requires SMTP/password-reset env vars.
+24. Deployment smoke checks:
+   - Added `scripts/smoke_post_deploy.mjs` (health + register/login/me + import enqueue/status).
+   - Railway deploy workflow now runs smoke checks and expects `SMOKE_API_BASE_URL` GitHub secret.

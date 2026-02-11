@@ -19,6 +19,10 @@ type GameRow = {
   eco: string | null;
   plyCount: number | null;
   timeControl: string | null;
+  whiteElo: number | null;
+  blackElo: number | null;
+  avgElo: number | null;
+  tags: TagItem[];
 };
 
 type GameDetail = {
@@ -32,6 +36,8 @@ type GameDetail = {
   date: string | null;
   plyCount: number | null;
   startingFen: string | null;
+  whiteElo: number | null;
+  blackElo: number | null;
   pgn: string;
   moveTree: Record<string, unknown>;
 };
@@ -51,7 +57,13 @@ type ImportJob = {
     inserted: number;
     duplicates: number;
     parseErrors: number;
+    duplicateReasons?: {
+      byMoves: number;
+      byCanonical: number;
+    };
   };
+  strictDuplicateMode?: boolean;
+  throughputGamesPerMinute?: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -102,6 +114,92 @@ type ExportJob = {
   updatedAt: string;
 };
 
+type TagItem = {
+  id: number;
+  name: string;
+  color: string | null;
+  gameCount?: number;
+};
+
+type CollectionItem = {
+  id: number;
+  name: string;
+  description: string | null;
+  gameCount: number;
+};
+
+type PositionSearchRow = {
+  gameId: number;
+  ply: number;
+  sideToMove: "w" | "b";
+  white: string;
+  black: string;
+  result: string;
+  event: string | null;
+  snippet: {
+    before: string[];
+    at: string | null;
+    after: string[];
+  };
+};
+
+type PositionSearchResponse = {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: PositionSearchRow[];
+  fenNorm: string;
+};
+
+type OpeningTreeNode = {
+  fenNorm: string;
+  totalGames: number;
+  moves: Array<{
+    moveUci: string;
+    nextFenNorm: string | null;
+    games: number;
+    whiteWins: number;
+    blackWins: number;
+    draws: number;
+    scorePct: number | null;
+    popularityPct: number | null;
+    avgOpponentStrength: number | null;
+    performance: number | null;
+    transpositions: number;
+    children: OpeningTreeNode[];
+  }>;
+};
+
+type OpeningTreeResponse = {
+  fenNorm: string;
+  depth: number;
+  tree: OpeningTreeNode;
+};
+
+type AnnotationResponse = {
+  gameId: number;
+  schemaVersion: number;
+  annotations: Record<string, unknown>;
+  moveNotes: Record<string, unknown>;
+};
+
+type EngineLine = {
+  id: number;
+  ply: number;
+  fenNorm: string;
+  engine: string;
+  depth: number | null;
+  multipv: number | null;
+  pvUci: string[];
+  pvSan: string[];
+  evalCp: number | null;
+  evalMate: number | null;
+  nodes: number | null;
+  timeMs: number | null;
+  source: string;
+  createdAt: string;
+};
+
 type MoveNode = {
   notation?: {
     notation?: string;
@@ -118,7 +216,19 @@ type NotationLine = {
 };
 
 function apiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+  if (process.env.NEXT_PUBLIC_API_BASE_URL) {
+    return process.env.NEXT_PUBLIC_API_BASE_URL;
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://localhost:4000";
+    }
+    if (host.endsWith("kezilu.com")) {
+      return "https://api.kezilu.com";
+    }
+  }
+  return "http://localhost:4000";
 }
 
 function toQuery(params: Record<string, string | number | undefined>): string {
@@ -351,6 +461,7 @@ export default function Home() {
 
   const [player, setPlayer] = useState("");
   const [eco, setEco] = useState("");
+  const [openingPrefix, setOpeningPrefix] = useState("");
   const [eventFilter, setEventFilter] = useState("");
   const [siteFilter, setSiteFilter] = useState("");
   const [result, setResult] = useState("");
@@ -358,11 +469,20 @@ export default function Home() {
   const [rated, setRated] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [whiteEloMin, setWhiteEloMin] = useState("");
+  const [whiteEloMax, setWhiteEloMax] = useState("");
+  const [blackEloMin, setBlackEloMin] = useState("");
+  const [blackEloMax, setBlackEloMax] = useState("");
+  const [avgEloMin, setAvgEloMin] = useState("");
+  const [avgEloMax, setAvgEloMax] = useState("");
+  const [collectionFilterId, setCollectionFilterId] = useState("");
+  const [tagFilterId, setTagFilterId] = useState("");
   const [sort, setSort] = useState("date_desc");
   const [page, setPage] = useState(1);
 
   const [games, setGames] = useState<GamesResponse | null>(null);
   const [tableStatus, setTableStatus] = useState("Sign in to load games");
+  const [selectedGameIds, setSelectedGameIds] = useState<number[]>([]);
 
   const [selectedGameId, setSelectedGameId] = useState<number | null>(null);
   const [selectedGame, setSelectedGame] = useState<GameDetail | null>(null);
@@ -377,15 +497,29 @@ export default function Home() {
   const [annotationText, setAnnotationText] = useState("");
   const [annotationHighlightsInput, setAnnotationHighlightsInput] = useState("");
   const [annotationArrowsInput, setAnnotationArrowsInput] = useState("");
+  const [annotationSchemaVersion, setAnnotationSchemaVersion] = useState(1);
+  const [currentMoveNote, setCurrentMoveNote] = useState("");
+  const [currentMoveGlyphs, setCurrentMoveGlyphs] = useState("");
+  const [moveNotesByPly, setMoveNotesByPly] = useState<Record<string, unknown>>({});
   const [annotationStatus, setAnnotationStatus] = useState("No annotations loaded");
+  const [engineLines, setEngineLines] = useState<EngineLine[]>([]);
+  const [engineLineStatus, setEngineLineStatus] = useState("No saved engine lines");
 
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [strictDuplicateImport, setStrictDuplicateImport] = useState(false);
   const [importStatus, setImportStatus] = useState("Sign in to import PGN files");
   const [imports, setImports] = useState<ImportJob[]>([]);
 
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [filterName, setFilterName] = useState("");
   const [filterMessage, setFilterMessage] = useState("Sign in to manage saved filters");
+  const [tags, setTags] = useState<TagItem[]>([]);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState("#4f8f6b");
+  const [tagStatus, setTagStatus] = useState("Sign in to manage tags");
+  const [collections, setCollections] = useState<CollectionItem[]>([]);
+  const [newCollectionName, setNewCollectionName] = useState("");
+  const [collectionStatus, setCollectionStatus] = useState("Sign in to manage collections");
 
   const [analysisFen, setAnalysisFen] = useState(
     "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5"
@@ -398,6 +532,13 @@ export default function Home() {
   const [exportJobs, setExportJobs] = useState<ExportJob[]>([]);
   const [exportStatus, setExportStatus] = useState("Sign in to create exports");
   const [includeExportAnnotations, setIncludeExportAnnotations] = useState(false);
+  const [positionSearchInput, setPositionSearchInput] = useState(
+    "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5"
+  );
+  const [positionSearchStatus, setPositionSearchStatus] = useState("Sign in to search positions");
+  const [positionSearchResults, setPositionSearchResults] = useState<PositionSearchRow[]>([]);
+  const [openingTree, setOpeningTree] = useState<OpeningTreeNode | null>(null);
+  const [openingTreeStatus, setOpeningTreeStatus] = useState("Open a position to load opening tree");
 
   const pageCount = useMemo(() => {
     if (!games) {
@@ -416,6 +557,8 @@ export default function Home() {
     () => parseAnnotationStringList(annotationArrowsInput),
     [annotationArrowsInput]
   );
+  const hasAnyGames = (games?.total ?? 0) > 0;
+  const hasOpenedGame = selectedGame !== null;
 
   function applyNotationLine(
     startingFen: string | null,
@@ -443,9 +586,12 @@ export default function Home() {
 
     setUser(null);
     setGames(null);
+    setSelectedGameIds([]);
     setImports([]);
     setExportJobs([]);
     setSavedFilters([]);
+    setTags([]);
+    setCollections([]);
     setSelectedGame(null);
     setSelectedGameId(null);
     setNotationLines([]);
@@ -456,6 +602,13 @@ export default function Home() {
     setAnnotationText("");
     setAnnotationHighlightsInput("");
     setAnnotationArrowsInput("");
+    setAnnotationSchemaVersion(1);
+    setMoveNotesByPly({});
+    setCurrentMoveNote("");
+    setCurrentMoveGlyphs("");
+    setEngineLines([]);
+    setPositionSearchResults([]);
+    setOpeningTree(null);
     setAuthMessage("Not signed in");
   }
 
@@ -472,6 +625,7 @@ export default function Home() {
       sort,
       player,
       eco,
+      openingPrefix,
       event: eventFilter,
       site: siteFilter,
       result,
@@ -479,6 +633,14 @@ export default function Home() {
       rated,
       fromDate,
       toDate,
+      whiteEloMin,
+      whiteEloMax,
+      blackEloMin,
+      blackEloMax,
+      avgEloMin,
+      avgEloMax,
+      collectionId: collectionFilterId || undefined,
+      tagId: tagFilterId || undefined,
     });
 
     setTableStatus("Loading games...");
@@ -495,6 +657,8 @@ export default function Home() {
     }
 
     setGames(response.data);
+    const visibleIds = new Set(response.data.items.map((item) => item.id));
+    setSelectedGameIds((current) => current.filter((id) => visibleIds.has(id)));
     setTableStatus(
       response.data.total > 0
         ? `${response.data.total} game(s) matched`
@@ -543,7 +707,7 @@ export default function Home() {
       setPgnText(game.pgn);
     }
 
-    const annotations = await fetchJson<{ gameId: number; annotations: Record<string, unknown> }>(
+    const annotations = await fetchJson<AnnotationResponse>(
       `/api/games/${gameId}/annotations`,
       {
         method: "GET",
@@ -562,13 +726,19 @@ export default function Home() {
       setAnnotationText(typeof comment === "string" ? comment : "");
       setAnnotationHighlightsInput(asAnnotationInput(saved.highlights));
       setAnnotationArrowsInput(asAnnotationInput(saved.arrows));
+      setAnnotationSchemaVersion(annotations.data.schemaVersion ?? 1);
+      setMoveNotesByPly(annotations.data.moveNotes ?? {});
       setAnnotationStatus("Annotations loaded");
     } else {
       setAnnotationText("");
       setAnnotationHighlightsInput("");
       setAnnotationArrowsInput("");
+      setAnnotationSchemaVersion(1);
+      setMoveNotesByPly({});
       setAnnotationStatus("No annotations found");
     }
+
+    await refreshEngineLines(gameId);
   }
 
   async function saveAnnotations(): Promise<void> {
@@ -588,6 +758,8 @@ export default function Home() {
             highlights: parseAnnotationStringList(annotationHighlightsInput),
             arrows: parseAnnotationStringList(annotationArrowsInput),
           },
+          schemaVersion: annotationSchemaVersion,
+          moveNotes: moveNotesByPly,
         }),
       }
     );
@@ -693,6 +865,211 @@ export default function Home() {
     );
   }
 
+  async function refreshTags(): Promise<void> {
+    if (!user) {
+      setTags([]);
+      setTagStatus("Sign in to manage tags");
+      return;
+    }
+    const response = await fetchJson<{ items: TagItem[] }>("/api/tags", {
+      method: "GET",
+    });
+    if (response.status !== 200 || !("items" in response.data)) {
+      setTagStatus(
+        `Failed to load tags${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setTags(response.data.items);
+    setTagStatus(response.data.items.length > 0 ? `${response.data.items.length} tag(s)` : "No tags");
+  }
+
+  async function refreshCollections(): Promise<void> {
+    if (!user) {
+      setCollections([]);
+      setCollectionStatus("Sign in to manage collections");
+      return;
+    }
+    const response = await fetchJson<{ items: CollectionItem[] }>("/api/collections", {
+      method: "GET",
+    });
+    if (response.status !== 200 || !("items" in response.data)) {
+      setCollectionStatus(
+        `Failed to load collections${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setCollections(response.data.items);
+    setCollectionStatus(
+      response.data.items.length > 0
+        ? `${response.data.items.length} collection(s)`
+        : "No collections"
+    );
+  }
+
+  async function refreshEngineLines(gameId: number, ply?: number): Promise<void> {
+    if (!user) {
+      setEngineLines([]);
+      setEngineLineStatus("Sign in to load saved lines");
+      return;
+    }
+    const query = ply !== undefined ? `?ply=${ply}` : "";
+    const response = await fetchJson<{ items: EngineLine[] }>(
+      `/api/games/${gameId}/engine-lines${query}`,
+      { method: "GET" }
+    );
+    if (response.status !== 200 || !("items" in response.data)) {
+      setEngineLineStatus(
+        `Failed to load engine lines${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setEngineLines(response.data.items);
+    setEngineLineStatus(
+      response.data.items.length > 0
+        ? `${response.data.items.length} saved line(s)`
+        : "No saved lines for this position"
+    );
+  }
+
+  async function createTag(): Promise<void> {
+    if (!user || !newTagName.trim()) {
+      return;
+    }
+    const response = await fetchJson<{ id: number }>("/api/tags", {
+      method: "POST",
+      body: JSON.stringify({
+        name: newTagName.trim(),
+        color: newTagColor,
+      }),
+    });
+    if (response.status !== 201) {
+      setTagStatus(
+        `Failed to create tag${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setNewTagName("");
+    await refreshTags();
+  }
+
+  async function createCollection(): Promise<void> {
+    if (!user || !newCollectionName.trim()) {
+      return;
+    }
+    const response = await fetchJson<{ id: number }>("/api/collections", {
+      method: "POST",
+      body: JSON.stringify({
+        name: newCollectionName.trim(),
+      }),
+    });
+    if (response.status !== 201) {
+      setCollectionStatus(
+        `Failed to create collection${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setNewCollectionName("");
+    await refreshCollections();
+  }
+
+  async function assignSelectedGamesToCollection(collectionId: number): Promise<void> {
+    if (!user || selectedGameIds.length === 0) {
+      return;
+    }
+    const response = await fetchJson<{ assignedCount: number }>(
+      `/api/collections/${collectionId}/games`,
+      {
+        method: "POST",
+        body: JSON.stringify({ gameIds: selectedGameIds }),
+      }
+    );
+    if (response.status !== 200) {
+      setCollectionStatus(
+        `Failed to add games to collection${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setCollectionStatus(`Added ${selectedGameIds.length} game(s) to collection`);
+    await refreshCollections();
+  }
+
+  async function assignTagToSelectedGames(tagId: number): Promise<void> {
+    if (!user || selectedGameIds.length === 0) {
+      return;
+    }
+    let assigned = 0;
+    for (const gameId of selectedGameIds) {
+      const response = await fetchJson<{ gameId: number; tagId: number }>(
+        `/api/games/${gameId}/tags/${tagId}`,
+        { method: "POST" }
+      );
+      if (response.status === 201) {
+        assigned += 1;
+      }
+    }
+    setTagStatus(`Assigned tag to ${assigned} game(s)`);
+    await Promise.all([refreshTags(), refreshGames(page)]);
+  }
+
+  async function searchPosition(): Promise<void> {
+    if (!user) {
+      return;
+    }
+    setPositionSearchStatus("Searching position...");
+    const response = await fetchJson<PositionSearchResponse>("/api/search/position", {
+      method: "POST",
+      body: JSON.stringify({
+        fen: positionSearchInput,
+        page: 1,
+        pageSize: 30,
+      }),
+    });
+    if (response.status !== 200 || !("items" in response.data)) {
+      setPositionSearchStatus(
+        `Position search failed${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setPositionSearchResults(response.data.items);
+    setPositionSearchStatus(
+      response.data.total > 0
+        ? `${response.data.total} matching position(s)`
+        : "No matching positions"
+    );
+  }
+
+  async function loadOpeningTree(fen: string): Promise<void> {
+    if (!user) {
+      return;
+    }
+    setOpeningTreeStatus("Loading opening tree...");
+    const query = toQuery({
+      fen,
+      depth: 2,
+    });
+    const response = await fetchJson<OpeningTreeResponse>(`/api/openings/tree${query}`, {
+      method: "GET",
+    });
+    if (response.status !== 200 || !("tree" in response.data)) {
+      setOpeningTreeStatus(
+        `Failed to load opening tree${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setOpeningTree(response.data.tree);
+    setOpeningTreeStatus("Opening tree loaded");
+  }
+
+  async function enqueueBackfill(): Promise<void> {
+    if (!user) {
+      return;
+    }
+    await fetchJson("/api/backfill/positions", { method: "POST" });
+    await fetchJson("/api/backfill/openings", { method: "POST" });
+    setImportStatus("Backfill jobs queued");
+  }
+
   async function submitAuth(mode: "register" | "login"): Promise<void> {
     const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
     const response = await fetchJson<{ user: User }>(endpoint, {
@@ -714,6 +1091,8 @@ export default function Home() {
       refreshImports(),
       refreshSavedFilters(),
       refreshExports(),
+      refreshTags(),
+      refreshCollections(),
     ]);
   }
 
@@ -747,6 +1126,8 @@ export default function Home() {
         site: "Moscow",
         date: "1985-10-15",
         timeControl: "40/7200:20/3600",
+        whiteElo: 2710,
+        blackElo: 2700,
         plyCount: 58,
         startingFen: "startpos",
         movesHash: sampleHash,
@@ -778,7 +1159,7 @@ export default function Home() {
 
     setImportStatus("Uploading and queueing import job...");
     const response = await fetchJson<{ id: number }>(
-      "/api/imports",
+      `/api/imports${strictDuplicateImport ? "?strictDuplicate=true" : ""}`,
       {
         method: "POST",
         body: form,
@@ -810,6 +1191,7 @@ export default function Home() {
         query: {
           player,
           eco,
+          openingPrefix,
           event: eventFilter,
           site: siteFilter,
           result,
@@ -817,6 +1199,14 @@ export default function Home() {
           rated,
           fromDate,
           toDate,
+          whiteEloMin,
+          whiteEloMax,
+          blackEloMin,
+          blackEloMax,
+          avgEloMin,
+          avgEloMax,
+          collectionId: collectionFilterId,
+          tagId: tagFilterId,
           sort,
         },
       }),
@@ -940,7 +1330,7 @@ export default function Home() {
       return;
     }
 
-    const response = await fetchJson<{ id: number; status: string }>("/api/analysis", {
+    const response = await fetchJson<{ id: number; status: string; cached?: boolean }>("/api/analysis", {
       method: "POST",
       body: JSON.stringify({
         fen: analysisFen,
@@ -955,9 +1345,15 @@ export default function Home() {
       return;
     }
 
-    setAnalysisStatus(`Queued analysis #${response.data.id}`);
+    setAnalysisStatus(
+      response.data.status === "completed"
+        ? `Loaded cached analysis #${response.data.id}`
+        : `Queued analysis #${response.data.id}`
+    );
     await refreshAnalysis(response.data.id);
-    openAnalysisStream(response.data.id);
+    if (response.data.status !== "completed") {
+      openAnalysisStream(response.data.id);
+    }
   }
 
   async function cancelAnalysis(): Promise<void> {
@@ -1000,6 +1396,7 @@ export default function Home() {
         query: {
           player,
           eco,
+          openingPrefix,
           event: eventFilter,
           site: siteFilter,
           result,
@@ -1007,6 +1404,14 @@ export default function Home() {
           rated,
           fromDate,
           toDate,
+          whiteEloMin,
+          whiteEloMax,
+          blackEloMin,
+          blackEloMax,
+          avgEloMin,
+          avgEloMax,
+          collectionId: collectionFilterId || undefined,
+          tagId: tagFilterId || undefined,
         },
         includeAnnotations: includeExportAnnotations,
       }),
@@ -1023,6 +1428,104 @@ export default function Home() {
     await refreshExports();
   }
 
+  async function createExportBySelectedGames(): Promise<void> {
+    if (!user || selectedGameIds.length === 0) {
+      return;
+    }
+
+    const response = await fetchJson<{ id: number }>("/api/exports", {
+      method: "POST",
+      body: JSON.stringify({
+        mode: "ids",
+        gameIds: selectedGameIds,
+        includeAnnotations: includeExportAnnotations,
+      }),
+    });
+
+    if (response.status !== 201 || !("id" in response.data)) {
+      setExportStatus(
+        `Failed to queue selected export${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+
+    setExportStatus(`Queued selected export job #${response.data.id}`);
+    await refreshExports();
+  }
+
+  function toggleSelectedGame(gameId: number): void {
+    setSelectedGameIds((current) =>
+      current.includes(gameId)
+        ? current.filter((id) => id !== gameId)
+        : [...current, gameId]
+    );
+  }
+
+  function saveCurrentMoveNoteToState(): void {
+    const key = String(cursor);
+    setMoveNotesByPly((current) => ({
+      ...current,
+      [key]: {
+        comment: currentMoveNote,
+        glyphs: currentMoveGlyphs
+          .split(",")
+          .map((part) => part.trim())
+          .filter((part) => part.length > 0)
+          .map((part) => Number(part))
+          .filter((value) => Number.isInteger(value) && value > 0),
+      },
+    }));
+    setAnnotationStatus(`Staged move note for ply ${cursor}. Save annotations to persist.`);
+  }
+
+  async function saveActiveAnalysisLine(): Promise<void> {
+    if (!selectedGameId || !currentFen || !activeAnalysis?.result.pv) {
+      return;
+    }
+    const pvUci = activeAnalysis.result.pv
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+
+    const response = await fetchJson<{ id: number }>("/api/analysis/store", {
+      method: "POST",
+      body: JSON.stringify({
+        gameId: selectedGameId,
+        ply: cursor,
+        fen: currentFen,
+        depth: activeAnalysis.limits.depth ?? analysisDepth,
+        pvUci,
+        evalCp: activeAnalysis.result.evalCp ?? undefined,
+        evalMate: activeAnalysis.result.evalMate ?? undefined,
+        timeMs: activeAnalysis.limits.timeMs ?? undefined,
+        source: "live-analysis",
+      }),
+    });
+    if (response.status !== 201) {
+      setEngineLineStatus(
+        `Failed to save line${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    setEngineLineStatus("Saved current analysis line");
+    await refreshEngineLines(selectedGameId, cursor);
+  }
+
+  async function deleteEngineLine(lineId: number): Promise<void> {
+    const response = await fetchJson<{ error?: string }>(`/api/engine-lines/${lineId}`, {
+      method: "DELETE",
+    });
+    if (response.status !== 204) {
+      setEngineLineStatus(
+        `Failed to delete line${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    if (selectedGameId) {
+      await refreshEngineLines(selectedGameId, cursor);
+    }
+  }
+
   function selectNotationLine(line: NotationLine): void {
     if (!selectedGame) {
       return;
@@ -1036,6 +1539,7 @@ export default function Home() {
 
     setPlayer(String(query.player ?? ""));
     setEco(String(query.eco ?? ""));
+    setOpeningPrefix(String(query.openingPrefix ?? ""));
     setEventFilter(String(query.event ?? ""));
     setSiteFilter(String(query.site ?? ""));
     setResult(String(query.result ?? ""));
@@ -1043,6 +1547,14 @@ export default function Home() {
     setRated(String(query.rated ?? ""));
     setFromDate(String(query.fromDate ?? ""));
     setToDate(String(query.toDate ?? ""));
+    setWhiteEloMin(String(query.whiteEloMin ?? ""));
+    setWhiteEloMax(String(query.whiteEloMax ?? ""));
+    setBlackEloMin(String(query.blackEloMin ?? ""));
+    setBlackEloMax(String(query.blackEloMax ?? ""));
+    setAvgEloMin(String(query.avgEloMin ?? ""));
+    setAvgEloMax(String(query.avgEloMax ?? ""));
+    setCollectionFilterId(String(query.collectionId ?? ""));
+    setTagFilterId(String(query.tagId ?? ""));
     setSort(String(query.sort ?? "date_desc"));
     setPage(1);
     void refreshGames(1);
@@ -1063,7 +1575,14 @@ export default function Home() {
       return;
     }
 
-    void Promise.all([refreshGames(1), refreshImports(), refreshSavedFilters(), refreshExports()]);
+    void Promise.all([
+      refreshGames(1),
+      refreshImports(),
+      refreshSavedFilters(),
+      refreshExports(),
+      refreshTags(),
+      refreshCollections(),
+    ]);
     setPage(1);
   }, [user]);
 
@@ -1113,6 +1632,35 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [autoplay, fenHistory.length]);
+
+  useEffect(() => {
+    if (!currentFen) {
+      return;
+    }
+    setAnalysisFen(currentFen);
+  }, [currentFen]);
+
+  useEffect(() => {
+    const note = moveNotesByPly[String(cursor)] as
+      | { comment?: unknown; glyphs?: unknown }
+      | undefined;
+    setCurrentMoveNote(typeof note?.comment === "string" ? note.comment : "");
+    setCurrentMoveGlyphs(
+      Array.isArray(note?.glyphs)
+        ? note!.glyphs
+            .map((glyph) => (typeof glyph === "number" ? String(glyph) : ""))
+            .filter((glyph) => glyph.length > 0)
+            .join(", ")
+        : ""
+    );
+  }, [cursor, moveNotesByPly]);
+
+  useEffect(() => {
+    if (!selectedGameId || !user) {
+      return;
+    }
+    void refreshEngineLines(selectedGameId, cursor);
+  }, [selectedGameId, cursor, user]);
 
   useEffect(() => {
     return () => {
@@ -1167,6 +1715,23 @@ export default function Home() {
       </section>
 
       <section className="card">
+        <h2>Get Started</h2>
+        <ol className="muted">
+          <li>{user ? "Done" : "Pending"}: Create or login to your account.</li>
+          <li>{hasAnyGames ? "Done" : "Pending"}: Import PGN (or insert a sample game) to seed your DB.</li>
+          <li>{hasOpenedGame ? "Done" : "Pending"}: Open a game and start analysis/annotation.</li>
+        </ol>
+        <div className="button-row">
+          <button onClick={() => void createSampleGame()} disabled={!user}>
+            Insert Sample Game
+          </button>
+          <button onClick={() => void enqueueBackfill()} disabled={!user}>
+            Run Backfill
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
         <div className="section-head">
           <h2>Database Home</h2>
           <button onClick={() => void createSampleGame()} disabled={!user}>
@@ -1177,6 +1742,11 @@ export default function Home() {
         <form className="filters" onSubmit={onFilterSubmit}>
           <input placeholder="Player" value={player} onChange={(event) => setPlayer(event.target.value)} />
           <input placeholder="ECO" value={eco} onChange={(event) => setEco(event.target.value)} />
+          <input
+            placeholder="Opening Prefix (e.g. B9)"
+            value={openingPrefix}
+            onChange={(event) => setOpeningPrefix(event.target.value)}
+          />
           <input
             placeholder="Event"
             value={eventFilter}
@@ -1200,6 +1770,61 @@ export default function Home() {
           </select>
           <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
           <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+          <input
+            type="number"
+            placeholder="White Elo min"
+            value={whiteEloMin}
+            onChange={(event) => setWhiteEloMin(event.target.value)}
+          />
+          <input
+            type="number"
+            placeholder="White Elo max"
+            value={whiteEloMax}
+            onChange={(event) => setWhiteEloMax(event.target.value)}
+          />
+          <input
+            type="number"
+            placeholder="Black Elo min"
+            value={blackEloMin}
+            onChange={(event) => setBlackEloMin(event.target.value)}
+          />
+          <input
+            type="number"
+            placeholder="Black Elo max"
+            value={blackEloMax}
+            onChange={(event) => setBlackEloMax(event.target.value)}
+          />
+          <input
+            type="number"
+            placeholder="Avg Elo min"
+            value={avgEloMin}
+            onChange={(event) => setAvgEloMin(event.target.value)}
+          />
+          <input
+            type="number"
+            placeholder="Avg Elo max"
+            value={avgEloMax}
+            onChange={(event) => setAvgEloMax(event.target.value)}
+          />
+          <select
+            value={collectionFilterId}
+            onChange={(event) => setCollectionFilterId(event.target.value)}
+          >
+            <option value="">Any collection</option>
+            {collections.map((collection) => (
+              <option key={collection.id} value={collection.id}>
+                {collection.name}
+              </option>
+            ))}
+          </select>
+          <select value={tagFilterId} onChange={(event) => setTagFilterId(event.target.value)}>
+            <option value="">Any tag</option>
+            {tags.map((tag) => (
+              <option key={tag.id} value={tag.id}>
+                {tag.name}
+              </option>
+            ))}
+          </select>
           <select value={sort} onChange={(event) => setSort(event.target.value)}>
             <option value="date_desc">Date desc</option>
             <option value="date_asc">Date asc</option>
@@ -1211,11 +1836,55 @@ export default function Home() {
         </form>
 
         <p className="muted">{tableStatus}</p>
+        <div className="button-row">
+          <span>{selectedGameIds.length} selected</span>
+          {collections.length > 0 ? (
+            <select
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isInteger(value) && value > 0) {
+                  void assignSelectedGamesToCollection(value);
+                  event.currentTarget.value = "";
+                }
+              }}
+              defaultValue=""
+              disabled={!user || selectedGameIds.length === 0}
+            >
+              <option value="">Add selected to collection</option>
+              {collections.map((collection) => (
+                <option key={collection.id} value={collection.id}>
+                  {collection.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {tags.length > 0 ? (
+            <select
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isInteger(value) && value > 0) {
+                  void assignTagToSelectedGames(value);
+                  event.currentTarget.value = "";
+                }
+              }}
+              defaultValue=""
+              disabled={!user || selectedGameIds.length === 0}
+            >
+              <option value="">Tag selected games</option>
+              {tags.map((tag) => (
+                <option key={tag.id} value={tag.id}>
+                  {tag.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
 
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
+                <th>Select</th>
                 <th>ID</th>
                 <th>White</th>
                 <th>Black</th>
@@ -1223,6 +1892,8 @@ export default function Home() {
                 <th>Date</th>
                 <th>ECO</th>
                 <th>Event</th>
+                <th>Avg Elo</th>
+                <th>Tags</th>
                 <th>Ply</th>
                 <th>Action</th>
               </tr>
@@ -1230,6 +1901,13 @@ export default function Home() {
             <tbody>
               {games?.items.map((game) => (
                 <tr key={game.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selectedGameIds.includes(game.id)}
+                      onChange={() => toggleSelectedGame(game.id)}
+                    />
+                  </td>
                   <td>{game.id}</td>
                   <td>{game.white}</td>
                   <td>{game.black}</td>
@@ -1237,6 +1915,12 @@ export default function Home() {
                   <td>{game.date ?? "-"}</td>
                   <td>{game.eco ?? "-"}</td>
                   <td>{game.event ?? "-"}</td>
+                  <td>{game.avgElo ? Math.round(game.avgElo) : "-"}</td>
+                  <td>
+                    {game.tags.length > 0
+                      ? game.tags.map((tag) => tag.name).join(", ")
+                      : "-"}
+                  </td>
                   <td>{game.plyCount ?? "-"}</td>
                   <td>
                     <button onClick={() => void openGameViewer(game.id)} disabled={!user}>
@@ -1247,7 +1931,7 @@ export default function Home() {
               ))}
               {games && games.items.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>No rows</td>
+                  <td colSpan={12}>No rows</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1336,6 +2020,11 @@ export default function Home() {
               <p className="muted">
                 Active line: {notationLines.find((line) => line.id === activeLineId)?.label ?? "Mainline"}
               </p>
+              {selectedGame.whiteElo || selectedGame.blackElo ? (
+                <p className="muted">
+                  Elo: {selectedGame.whiteElo ?? "-"} / {selectedGame.blackElo ?? "-"}
+                </p>
+              ) : null}
               <label>
                 Notes
                 <textarea
@@ -1358,15 +2047,36 @@ export default function Home() {
                   onChange={(event) => setAnnotationArrowsInput(event.target.value)}
                 />
               </label>
+              <label>
+                Move Note (current ply)
+                <input
+                  value={currentMoveNote}
+                  onChange={(event) => setCurrentMoveNote(event.target.value)}
+                />
+              </label>
+              <label>
+                Move Glyphs (NAG numbers, comma-separated)
+                <input
+                  value={currentMoveGlyphs}
+                  onChange={(event) => setCurrentMoveGlyphs(event.target.value)}
+                />
+              </label>
               {annotationArrows.length > 0 ? (
                 <p className="muted">Arrows: {annotationArrows.join(", ")}</p>
               ) : null}
               <div className="button-row">
+                <button onClick={() => saveCurrentMoveNoteToState()} disabled={!selectedGameId}>
+                  Stage Move Note
+                </button>
                 <button onClick={() => void saveAnnotations()} disabled={!selectedGameId}>
                   Save Notes
                 </button>
+                <button onClick={() => void loadOpeningTree(currentFen ?? analysisFen)} disabled={!currentFen}>
+                  Opening Tree
+                </button>
               </div>
               <p className="muted">{annotationStatus}</p>
+              <p className="muted">{engineLineStatus}</p>
             </div>
 
             <div>
@@ -1409,6 +2119,22 @@ export default function Home() {
                   </a>
                 ) : null}
               </div>
+              <h3>Saved Engine Lines</h3>
+              <div className="line-list">
+                {engineLines.map((line) => (
+                  <div key={line.id} className="saved-filter-item">
+                    <div>
+                      <strong>ply {line.ply}</strong> | depth {line.depth ?? "-"} | eval{" "}
+                      {line.evalMate !== null ? `#${line.evalMate}` : line.evalCp}
+                      <div className="muted">{line.pvUci.join(" ") || "-"}</div>
+                    </div>
+                    <button onClick={() => void deleteEngineLine(line.id)}>Delete</button>
+                  </div>
+                ))}
+                {engineLines.length === 0 ? (
+                  <p className="muted">No saved lines at this ply</p>
+                ) : null}
+              </div>
             </div>
           </div>
         ) : null}
@@ -1418,6 +2144,15 @@ export default function Home() {
         <div className="section-head">
           <h2>Import Jobs</h2>
           <div className="button-row">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={strictDuplicateImport}
+                onChange={(event) => setStrictDuplicateImport(event.target.checked)}
+                disabled={!user}
+              />
+              Strict duplicate mode
+            </label>
             <input
               type="file"
               accept=".pgn,.pgn.zst"
@@ -1440,7 +2175,10 @@ export default function Home() {
                 <th>Parsed</th>
                 <th>Inserted</th>
                 <th>Duplicates</th>
+                <th>Dup:Move</th>
+                <th>Dup:Canonical</th>
                 <th>Parse Errors</th>
+                <th>Mode</th>
                 <th>Updated</th>
               </tr>
             </thead>
@@ -1452,13 +2190,16 @@ export default function Home() {
                   <td>{job.totals.parsed}</td>
                   <td>{job.totals.inserted}</td>
                   <td>{job.totals.duplicates}</td>
+                  <td>{job.totals.duplicateReasons?.byMoves ?? 0}</td>
+                  <td>{job.totals.duplicateReasons?.byCanonical ?? 0}</td>
                   <td>{job.totals.parseErrors}</td>
+                  <td>{job.strictDuplicateMode ? "strict" : "default"}</td>
                   <td>{new Date(job.updatedAt).toLocaleString()}</td>
                 </tr>
               ))}
               {imports.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>No import jobs</td>
+                  <td colSpan={10}>No import jobs</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1471,6 +2212,12 @@ export default function Home() {
           <h2>Engine Analysis</h2>
           <div className="button-row">
             <button onClick={() => void createAnalysis()} disabled={!user}>Analyze Position</button>
+            <button
+              onClick={() => void saveActiveAnalysisLine()}
+              disabled={!user || !selectedGameId || !activeAnalysis || !activeAnalysis.result.pv}
+            >
+              Save Line
+            </button>
             <button
               onClick={() => void cancelAnalysis()}
               disabled={!user || !activeAnalysis || activeAnalysis.status !== "running"}
@@ -1522,6 +2269,12 @@ export default function Home() {
             <button onClick={() => void createExportByCurrentFilter()} disabled={!user}>
               Export Current Filter
             </button>
+            <button
+              onClick={() => void createExportBySelectedGames()}
+              disabled={!user || selectedGameIds.length === 0}
+            >
+              Export Selected ({selectedGameIds.length})
+            </button>
           </div>
         </div>
         <p className="muted">{exportStatus}</p>
@@ -1567,6 +2320,193 @@ export default function Home() {
               ) : null}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Position Search</h2>
+          <div className="button-row">
+            <button onClick={() => void searchPosition()} disabled={!user}>
+              Search FEN
+            </button>
+          </div>
+        </div>
+        <div className="analysis-grid">
+          <label>
+            FEN
+            <input
+              value={positionSearchInput}
+              onChange={(event) => setPositionSearchInput(event.target.value)}
+              disabled={!user}
+            />
+          </label>
+        </div>
+        <p className="muted">{positionSearchStatus}</p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Game</th>
+                <th>Ply</th>
+                <th>Players</th>
+                <th>Snippet</th>
+                <th>Open</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positionSearchResults.map((row) => (
+                <tr key={`${row.gameId}-${row.ply}`}>
+                  <td>{row.gameId}</td>
+                  <td>{row.ply}</td>
+                  <td>
+                    {row.white} vs {row.black} ({row.result})
+                  </td>
+                  <td>
+                    {row.snippet.before.join(" ")}{" "}
+                    <strong>{row.snippet.at ?? ""}</strong>{" "}
+                    {row.snippet.after.join(" ")}
+                  </td>
+                  <td>
+                    <button
+                      onClick={() => {
+                        void (async () => {
+                          await openGameViewer(row.gameId);
+                          setCursor(row.ply);
+                        })();
+                      }}
+                    >
+                      Open
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {positionSearchResults.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>No position results</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Opening Explorer</h2>
+          <div className="button-row">
+            <button onClick={() => void loadOpeningTree(currentFen ?? positionSearchInput)} disabled={!user}>
+              Refresh Tree
+            </button>
+          </div>
+        </div>
+        <p className="muted">{openingTreeStatus}</p>
+        {openingTree ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Move (UCI)</th>
+                  <th>Games</th>
+                  <th>Popularity %</th>
+                  <th>Score %</th>
+                  <th>Avg Elo</th>
+                  <th>Transpositions</th>
+                  <th>Next</th>
+                </tr>
+              </thead>
+              <tbody>
+                {openingTree.moves.map((move) => (
+                  <tr key={move.moveUci}>
+                    <td>{move.moveUci}</td>
+                    <td>{move.games}</td>
+                    <td>{move.popularityPct?.toFixed(1) ?? "-"}</td>
+                    <td>{move.scorePct?.toFixed(1) ?? "-"}</td>
+                    <td>{move.avgOpponentStrength?.toFixed(0) ?? "-"}</td>
+                    <td>{move.transpositions}</td>
+                    <td>
+                      {move.nextFenNorm ? (
+                        <button
+                          onClick={() => {
+                            setPositionSearchInput(move.nextFenNorm ?? "");
+                            void loadOpeningTree(move.nextFenNorm ?? "");
+                          }}
+                        >
+                          Dive
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Collections</h2>
+        </div>
+        <div className="button-row">
+          <input
+            placeholder="Collection name"
+            value={newCollectionName}
+            onChange={(event) => setNewCollectionName(event.target.value)}
+            disabled={!user}
+          />
+          <button onClick={() => void createCollection()} disabled={!user || !newCollectionName.trim()}>
+            Create Collection
+          </button>
+        </div>
+        <p className="muted">{collectionStatus}</p>
+        <div className="saved-filters">
+          {collections.map((collection) => (
+            <div key={collection.id} className="saved-filter-item">
+              <div>
+                <strong>{collection.name}</strong> ({collection.gameCount})
+              </div>
+              <button onClick={() => setCollectionFilterId(String(collection.id))}>Filter</button>
+            </div>
+          ))}
+          {collections.length === 0 ? <p className="muted">No collections yet</p> : null}
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Tags</h2>
+        </div>
+        <div className="button-row">
+          <input
+            placeholder="Tag name"
+            value={newTagName}
+            onChange={(event) => setNewTagName(event.target.value)}
+            disabled={!user}
+          />
+          <input
+            type="color"
+            value={newTagColor}
+            onChange={(event) => setNewTagColor(event.target.value)}
+            disabled={!user}
+          />
+          <button onClick={() => void createTag()} disabled={!user || !newTagName.trim()}>
+            Create Tag
+          </button>
+        </div>
+        <p className="muted">{tagStatus}</p>
+        <div className="saved-filters">
+          {tags.map((tag) => (
+            <div key={tag.id} className="saved-filter-item">
+              <div>
+                <strong style={{ color: tag.color ?? undefined }}>{tag.name}</strong> ({tag.gameCount ?? 0})
+              </div>
+              <button onClick={() => setTagFilterId(String(tag.id))}>Filter</button>
+            </div>
+          ))}
+          {tags.length === 0 ? <p className="muted">No tags yet</p> : null}
         </div>
       </section>
 
