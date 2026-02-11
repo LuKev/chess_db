@@ -6,6 +6,7 @@ Planning docs:
 
 1. `docs/mvp_spec.md`
 2. `docs/build_backlog_plan.md`
+3. `docs/railway_setup.md`
 
 ## Monorepo Layout
 
@@ -30,6 +31,12 @@ npm install
 npm run dev:api
 npm run dev:web
 npm run dev:worker
+```
+
+Railway deployment helper:
+
+```bash
+./scripts/railway_deploy_all.sh
 ```
 
 ## Convert to Remote Git Repo
@@ -82,4 +89,3 @@ Then map your custom domain in Railway:
 2. Route/path-prefix `chessdb` to the `web` service (or use your edge/proxy rule to forward `/chessdb`).
 
 If Railway path routing is limited in your plan/region, route by subdomain (for example `chessdb.kezilu.com`) and use your site proxy to rewrite `/chessdb -> https://chessdb.kezilu.com`.
-
