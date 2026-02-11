@@ -9,11 +9,19 @@
     "dev:web": "npm --workspace @chessdb/web run dev",
     "dev:api": "npm --workspace @chessdb/api run dev",
     "dev:worker": "npm --workspace @chessdb/worker run dev",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces",
-    "typecheck": "npm run typecheck --workspaces"
+    "typecheck": "npm run typecheck --workspaces",
+    "migrate:api": "npm --workspace @chessdb/api run migrate"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "eslint": "^9.34.0",
+    "globals": "^16.3.0",
+    "typescript-eslint": "^8.41.0"
   }
 }
-
