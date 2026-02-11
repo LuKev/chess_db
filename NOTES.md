@@ -36,6 +36,7 @@
 24. Scheduled ops checks exist in `.github/workflows/nightly-slo.yml`:
    - strict API SLO benchmark (`npm run bench:slo`)
    - optional strict backfill verification (`npm run verify:backfill`) when `BACKFILL_VERIFY_DATABASE_URL` secret is set.
-25. Railway custom-domain status for `api.kezilu.com` currently requires DNS record:
-   - CNAME `api.kezilu.com` -> `1twus16e.up.railway.app` (`DNS_RECORD_STATUS_REQUIRES_UPDATE` as of 2026-02-11).
+25. Railway custom-domain for `api.kezilu.com` was recreated and now requires:
+   - CNAME `api.kezilu.com` -> `52so47f4.up.railway.app`.
+   - Railway custom-domain status shows `certificateStatus=VALID` and DNS `PROPAGATED` (2026-02-11).
 26. Cloudflare `wrangler` auth is available, but current token context cannot update DNS records via v4 API (returns Cloudflare authentication error); DNS update requires a Zone DNS Edit-capable API token or manual dashboard change.
