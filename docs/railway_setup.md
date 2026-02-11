@@ -93,3 +93,10 @@ railway up --service web --path-as-root apps/web -d
 railway up --service api --path-as-root apps/api -d
 railway up --service worker --path-as-root apps/worker -d
 ```
+
+## GitHub Push Auto-Deploy
+
+1. Workflow: `.github/workflows/railway-deploy.yml`
+2. Trigger: push to `main` for app/workflow path changes.
+3. Requires GitHub Actions secret `RAILWAY_TOKEN` to be a valid Railway API/deploy token.
+4. If runs fail with `Unauthorized`, rotate/regenerate the token in Railway dashboard and update the GitHub secret.

@@ -39,6 +39,16 @@ Railway deployment helper:
 ./scripts/railway_deploy_all.sh
 ```
 
+Automatic deploy on push:
+
+1. Workflow file: `.github/workflows/railway-deploy.yml`
+2. Required GitHub secret: `RAILWAY_TOKEN`
+3. Generate this as a Railway API/deploy token in Railway dashboard (account/project token), then set it:
+
+```bash
+gh secret set RAILWAY_TOKEN -R LuKev/chess_db
+```
+
 ## Convert to Remote Git Repo
 
 This directory is already initialized as a local git repo.
