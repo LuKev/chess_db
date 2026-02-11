@@ -85,3 +85,9 @@
    - Script: `scripts/setup_gcs_s3_railway.sh`
    - Doc: `docs/gcs_s3_railway.md`
    - Script exits early with clear instructions when billing is disabled.
+29. Final GCS/Railway storage wiring completed (2026-02-11):
+   - Billing was enabled on `gen-lang-client-0892480257`, then `scripts/setup_gcs_s3_railway.sh` ran successfully.
+   - Created bucket: `gs://chess-db-gen-lang-client-0892480257`.
+   - Set fresh GCS HMAC S3 credentials into Railway `api` and `worker` (`S3_ENDPOINT=https://storage.googleapis.com`, `S3_REGION=auto`, path style true).
+   - Redeploys for both services succeeded and smoke test passed against `https://api-production-d291.up.railway.app`.
+   - `https://api.kezilu.com` did not resolve from local DNS at time of verification (`ENOTFOUND`), so custom-domain DNS/propagation should be validated separately.
