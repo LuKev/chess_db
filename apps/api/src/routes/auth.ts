@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import type { AppConfig } from "../config.js";
+import type { PasswordResetMailer } from "../infrastructure/mailer.js";
 import {
   createSession,
   invalidateSession,
@@ -41,7 +42,8 @@ function hashResetToken(token: string): string {
 export async function registerAuthRoutes(
   app: FastifyInstance,
   pool: Pool,
-  config: AppConfig
+  config: AppConfig,
+  mailer: PasswordResetMailer
 ): Promise<void> {
   app.post("/api/auth/register", async (request, reply) => {
     const parsed = CredentialsSchema.safeParse(request.body);
@@ -191,6 +193,18 @@ export async function registerAuthRoutes(
          VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 minute'))`,
         [userId, tokenHash, PASSWORD_RESET_TTL_MINUTES]
       );
+
+      try {
+        await mailer.sendPasswordResetEmail({
+          email,
+          token: resetToken,
+        });
+      } catch (error) {
+        request.log.error(error);
+        return reply.status(500).send({
+          error: "Failed to send password reset email",
+        });
+      }
     }
 
     const response: { ok: boolean; resetToken?: string } = { ok: true };

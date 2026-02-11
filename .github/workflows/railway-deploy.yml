@@ -25,6 +25,7 @@ jobs:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: aea9db8b-a434-4826-864e-4869ed452dbe
       RAILWAY_ENVIRONMENT_ID: 46109543-4ee7-4b19-a824-4835282e2358
+      SMOKE_API_BASE_URL: ${{ secrets.SMOKE_API_BASE_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,3 +52,6 @@ jobs:
         run: |
           railway link --project-id "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker
           railway up --path-as-root apps/worker --ci
+
+      - name: Post-deploy smoke checks
+        run: node scripts/smoke_post_deploy.mjs

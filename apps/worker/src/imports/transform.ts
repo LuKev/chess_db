@@ -16,6 +16,8 @@ export type NormalizedGame = {
   whiteNorm: string;
   black: string;
   blackNorm: string;
+  whiteElo: number | null;
+  blackElo: number | null;
   result: string;
   event: string | null;
   eventNorm: string | null;
@@ -27,6 +29,8 @@ export type NormalizedGame = {
   plyCount: number | null;
   startingFen: string | null;
   movesHash: string;
+  canonicalPgnHash: string | null;
+  mainlineSan: string[];
   moveTree: Record<string, unknown>;
   source: string | null;
   license: string | null;
@@ -95,6 +99,17 @@ function parsePlyCount(value: unknown, fallbackLength: number): number | null {
   return parsed;
 }
 
+function parseElo(value: unknown): number | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 4000) {
+    return null;
+  }
+  return parsed;
+}
+
 function isParsedMove(value: unknown): value is ParsedMove {
   if (!value || typeof value !== "object") {
     return false;
@@ -143,12 +158,16 @@ export function normalizeParsedGame(parsedGame: ParsedGame): NormalizedGame {
   const source = sanitizeTag(tags.Source);
   const license = sanitizeTag(tags.License);
   const mainlineSan = extractMainlineSan(moves);
+  const whiteElo = parseElo(tags.WhiteElo);
+  const blackElo = parseElo(tags.BlackElo);
 
   return {
     white,
     whiteNorm: normalizeText(white),
     black,
     blackNorm: normalizeText(black),
+    whiteElo,
+    blackElo,
     result,
     event,
     eventNorm: event ? normalizeText(event) : null,
@@ -164,10 +183,25 @@ export function normalizeParsedGame(parsedGame: ParsedGame): NormalizedGame {
       mainlineSan,
       result,
     }),
+    canonicalPgnHash: null,
+    mainlineSan,
     moveTree: {
       moves,
     },
     source,
     license,
   };
+}
+
+export function buildCanonicalPgnHash(pgnText: string): string {
+  const canonical = pgnText
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join("\n")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return createHash("sha256").update(canonical).digest("hex");
 }

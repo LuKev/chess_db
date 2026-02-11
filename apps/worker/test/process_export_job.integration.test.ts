@@ -139,7 +139,7 @@ const databaseUrl = process.env.DATABASE_URL;
     });
 
     expect(uploaded).toContain("[Event \"Annotated\"]");
-    expect(uploaded).toContain("; ChessDBAnnotations");
+    expect(uploaded).toContain("{ChessDBAnnotations schema=");
     expect(uploaded).toContain("Critical idea");
   });
 });

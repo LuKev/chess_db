@@ -24,6 +24,13 @@ const ImportListQuerySchema = z.object({
   pageSize: z.coerce.number().int().positive().max(100).default(20),
 });
 
+const ImportCreateQuerySchema = z.object({
+  strictDuplicate: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+});
+
 function hasAllowedExtension(fileName: string): boolean {
   const lower = fileName.toLowerCase();
   return AllowedExtensions.some((ext) => lower.endsWith(ext));
@@ -44,6 +51,14 @@ export async function registerImportRoutes(
   storage: ObjectStorage
 ): Promise<void> {
   app.post("/api/imports", { preHandler: requireUser }, async (request, reply) => {
+    const createQuery = ImportCreateQuerySchema.safeParse(request.query);
+    if (!createQuery.success) {
+      return reply.status(400).send({
+        error: "Invalid query params",
+        details: createQuery.error.flatten(),
+      });
+    }
+
     const file = await request.file();
     if (!file) {
       return reply.status(400).send({ error: "Missing upload file" });
@@ -64,10 +79,10 @@ export async function registerImportRoutes(
     }
 
     const createJobResult = await pool.query<{ id: number | string }>(
-      `INSERT INTO import_jobs (user_id, status)
-       VALUES ($1, 'queued')
+      `INSERT INTO import_jobs (user_id, status, strict_duplicate_mode)
+       VALUES ($1, 'queued', $2)
        RETURNING id`,
-      [request.user!.id]
+      [request.user!.id, createQuery.data.strictDuplicate ?? false]
     );
 
     const importJobId = toId(createJobResult.rows[0].id);
@@ -115,6 +130,7 @@ export async function registerImportRoutes(
         id: importJobId,
         status: "queued",
         objectKey,
+        strictDuplicateMode: createQuery.data.strictDuplicate ?? false,
       });
     } catch (error) {
       request.log.error(error);
@@ -142,9 +158,12 @@ export async function registerImportRoutes(
         id: number | string;
         status: string;
         source_object_key: string | null;
+        strict_duplicate_mode: boolean;
         total_games: number;
         inserted_games: number;
         duplicate_games: number;
+        duplicate_by_moves: number;
+        duplicate_by_canonical: number;
         parse_errors: number;
         created_at: Date;
         updated_at: Date;
@@ -153,9 +172,12 @@ export async function registerImportRoutes(
           id,
           status,
           source_object_key,
+          strict_duplicate_mode,
           total_games,
           inserted_games,
           duplicate_games,
+          duplicate_by_moves,
+          duplicate_by_canonical,
           parse_errors,
           created_at,
           updated_at
@@ -182,21 +204,31 @@ export async function registerImportRoutes(
       );
 
       const job = jobResult.rows[0];
+      const durationMs =
+        new Date(job.updated_at).valueOf() - new Date(job.created_at).valueOf();
+      const throughputGamesPerMinute =
+        durationMs > 0 ? (job.inserted_games / durationMs) * 60_000 : null;
       return {
         id: toId(job.id),
         status: job.status,
         sourceObjectKey: job.source_object_key,
+        strictDuplicateMode: job.strict_duplicate_mode,
         totals: {
           parsed: job.total_games,
           inserted: job.inserted_games,
           duplicates: job.duplicate_games,
           parseErrors: job.parse_errors,
+          duplicateReasons: {
+            byMoves: job.duplicate_by_moves,
+            byCanonical: job.duplicate_by_canonical,
+          },
         },
         recentErrors: errorRows.rows.map((row) => ({
           lineNumber: row.line_number,
           gameOffset: row.game_offset,
           message: row.error_message,
         })),
+        throughputGamesPerMinute,
         createdAt: job.created_at.toISOString(),
         updatedAt: job.updated_at.toISOString(),
       };
@@ -225,9 +257,12 @@ export async function registerImportRoutes(
     const rows = await pool.query<{
       id: number | string;
       status: string;
+      strict_duplicate_mode: boolean;
       total_games: number;
       inserted_games: number;
       duplicate_games: number;
+      duplicate_by_moves: number;
+      duplicate_by_canonical: number;
       parse_errors: number;
       created_at: Date;
       updated_at: Date;
@@ -235,9 +270,12 @@ export async function registerImportRoutes(
       `SELECT
         id,
         status,
+        strict_duplicate_mode,
         total_games,
         inserted_games,
         duplicate_games,
+        duplicate_by_moves,
+        duplicate_by_canonical,
         parse_errors,
         created_at,
         updated_at
@@ -255,11 +293,16 @@ export async function registerImportRoutes(
       items: rows.rows.map((row) => ({
         id: toId(row.id),
         status: row.status,
+        strictDuplicateMode: row.strict_duplicate_mode,
         totals: {
           parsed: row.total_games,
           inserted: row.inserted_games,
           duplicates: row.duplicate_games,
           parseErrors: row.parse_errors,
+          duplicateReasons: {
+            byMoves: row.duplicate_by_moves,
+            byCanonical: row.duplicate_by_canonical,
+          },
         },
         createdAt: row.created_at.toISOString(),
         updatedAt: row.updated_at.toISOString(),

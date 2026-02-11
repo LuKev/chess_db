@@ -10,11 +10,17 @@ import {
   type ExportJobPayload,
   IMPORT_QUEUE_NAME,
   type ImportJobPayload,
+  OPENING_BACKFILL_QUEUE_NAME,
+  type OpeningBackfillPayload,
+  POSITION_BACKFILL_QUEUE_NAME,
+  type PositionBackfillPayload,
 } from "./infrastructure/queue.js";
 import { createObjectStorage } from "./infrastructure/storage.js";
 import { processAnalysisJob } from "./analysis/process_analysis_job.js";
 import { processExportJob } from "./exports/process_export_job.js";
 import { processImportJob } from "./imports/process_import_job.js";
+import { processOpeningBackfillJob } from "./backfill/process_opening_backfill_job.js";
+import { processPositionBackfillJob } from "./backfill/process_position_backfill_job.js";
 import {
   createWorkerMetrics,
   recordJobMetric,
@@ -36,6 +42,7 @@ initSentry({
 
 const pool = createPool(config);
 const storage = createObjectStorage(config);
+await storage.ensureBucket();
 const metrics = createWorkerMetrics();
 const metricsServer = startWorkerMetricsServer({
   metrics,
@@ -50,9 +57,13 @@ const metricsServer = startWorkerMetricsServer({
 const importRedisConnection = createRedisConnection(config.redisUrl);
 const analysisRedisConnection = createRedisConnection(config.redisUrl);
 const exportRedisConnection = createRedisConnection(config.redisUrl);
+const positionBackfillRedisConnection = createRedisConnection(config.redisUrl);
+const openingBackfillRedisConnection = createRedisConnection(config.redisUrl);
 const importStatsConnection = createRedisConnection(config.redisUrl);
 const analysisStatsConnection = createRedisConnection(config.redisUrl);
 const exportStatsConnection = createRedisConnection(config.redisUrl);
+const positionBackfillStatsConnection = createRedisConnection(config.redisUrl);
+const openingBackfillStatsConnection = createRedisConnection(config.redisUrl);
 
 const importQueueStats = new Queue(IMPORT_QUEUE_NAME, {
   connection: importStatsConnection,
@@ -62,6 +73,12 @@ const analysisQueueStats = new Queue(ANALYSIS_QUEUE_NAME, {
 });
 const exportQueueStats = new Queue(EXPORT_QUEUE_NAME, {
   connection: exportStatsConnection,
+});
+const positionBackfillQueueStats = new Queue(POSITION_BACKFILL_QUEUE_NAME, {
+  connection: positionBackfillStatsConnection,
+});
+const openingBackfillQueueStats = new Queue(OPENING_BACKFILL_QUEUE_NAME, {
+  connection: openingBackfillStatsConnection,
 });
 
 console.log(
@@ -139,6 +156,38 @@ const exportWorker = new Worker<ExportJobPayload>(
   }
 );
 
+const positionBackfillWorker = new Worker<PositionBackfillPayload>(
+  POSITION_BACKFILL_QUEUE_NAME,
+  async (job) => {
+    await runInstrumentedJob(POSITION_BACKFILL_QUEUE_NAME, async () => {
+      await processPositionBackfillJob({
+        pool,
+        userId: job.data.userId,
+      });
+    });
+  },
+  {
+    connection: positionBackfillRedisConnection,
+    concurrency: 1,
+  }
+);
+
+const openingBackfillWorker = new Worker<OpeningBackfillPayload>(
+  OPENING_BACKFILL_QUEUE_NAME,
+  async (job) => {
+    await runInstrumentedJob(OPENING_BACKFILL_QUEUE_NAME, async () => {
+      await processOpeningBackfillJob({
+        pool,
+        userId: job.data.userId,
+      });
+    });
+  },
+  {
+    connection: openingBackfillRedisConnection,
+    concurrency: 1,
+  }
+);
+
 importWorker.on("completed", (job) => {
   console.log(`[worker] completed import job ${job.id}`);
 });
@@ -166,6 +215,24 @@ exportWorker.on("failed", (job, error) => {
   captureException(error);
 });
 
+positionBackfillWorker.on("completed", (job) => {
+  console.log(`[worker] completed position backfill job ${job.id}`);
+});
+
+positionBackfillWorker.on("failed", (job, error) => {
+  console.error(`[worker] failed position backfill job ${job?.id}: ${String(error)}`);
+  captureException(error);
+});
+
+openingBackfillWorker.on("completed", (job) => {
+  console.log(`[worker] completed opening backfill job ${job.id}`);
+});
+
+openingBackfillWorker.on("failed", (job, error) => {
+  console.error(`[worker] failed opening backfill job ${job?.id}: ${String(error)}`);
+  captureException(error);
+});
+
 async function refreshQueueDepthMetrics(): Promise<void> {
   const importDepth =
     (await importQueueStats.getWaitingCount()) +
@@ -179,10 +246,20 @@ async function refreshQueueDepthMetrics(): Promise<void> {
     (await exportQueueStats.getWaitingCount()) +
     (await exportQueueStats.getActiveCount()) +
     (await exportQueueStats.getDelayedCount());
+  const positionBackfillDepth =
+    (await positionBackfillQueueStats.getWaitingCount()) +
+    (await positionBackfillQueueStats.getActiveCount()) +
+    (await positionBackfillQueueStats.getDelayedCount());
+  const openingBackfillDepth =
+    (await openingBackfillQueueStats.getWaitingCount()) +
+    (await openingBackfillQueueStats.getActiveCount()) +
+    (await openingBackfillQueueStats.getDelayedCount());
 
   updateQueueDepthMetric(metrics, IMPORT_QUEUE_NAME, importDepth);
   updateQueueDepthMetric(metrics, ANALYSIS_QUEUE_NAME, analysisDepth);
   updateQueueDepthMetric(metrics, EXPORT_QUEUE_NAME, exportDepth);
+  updateQueueDepthMetric(metrics, POSITION_BACKFILL_QUEUE_NAME, positionBackfillDepth);
+  updateQueueDepthMetric(metrics, OPENING_BACKFILL_QUEUE_NAME, openingBackfillDepth);
 }
 
 await refreshQueueDepthMetrics();
@@ -216,17 +293,25 @@ async function shutdown(signal: string): Promise<void> {
   await importWorker.close();
   await analysisWorker.close();
   await exportWorker.close();
+  await positionBackfillWorker.close();
+  await openingBackfillWorker.close();
 
   await importQueueStats.close();
   await analysisQueueStats.close();
   await exportQueueStats.close();
+  await positionBackfillQueueStats.close();
+  await openingBackfillQueueStats.close();
 
   await importRedisConnection.quit();
   await analysisRedisConnection.quit();
   await exportRedisConnection.quit();
+  await positionBackfillRedisConnection.quit();
+  await openingBackfillRedisConnection.quit();
   await importStatsConnection.quit();
   await analysisStatsConnection.quit();
   await exportStatsConnection.quit();
+  await positionBackfillStatsConnection.quit();
+  await openingBackfillStatsConnection.quit();
   await storage.close();
   await pool.end();
 

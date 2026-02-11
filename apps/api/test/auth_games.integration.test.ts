@@ -9,6 +9,8 @@ import type {
   AnalysisQueue,
   ExportQueue,
   ImportQueue,
+  OpeningBackfillQueue,
+  PositionBackfillQueue,
 } from "../src/infrastructure/queue.js";
 import type { ObjectStorage } from "../src/infrastructure/storage.js";
 import { runMigrations } from "../src/migrations.js";
@@ -72,6 +74,14 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
       },
       close: async () => {},
     };
+    const noOpPositionBackfillQueue: PositionBackfillQueue = {
+      enqueuePositionBackfill: async () => {},
+      close: async () => {},
+    };
+    const noOpOpeningBackfillQueue: OpeningBackfillQueue = {
+      enqueueOpeningBackfill: async () => {},
+      close: async () => {},
+    };
     const noOpStorage: ObjectStorage = {
       ensureBucket: async () => {},
       uploadObject: async ({ key, contentType, body }) => {
@@ -120,6 +130,8 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
       importQueue: noOpQueue,
       analysisQueue: noOpAnalysisQueue,
       exportQueue: noOpExportQueue,
+      positionBackfillQueue: noOpPositionBackfillQueue,
+      openingBackfillQueue: noOpOpeningBackfillQueue,
       objectStorage: noOpStorage,
       runMigrationsOnBoot: false,
     });
@@ -166,6 +178,13 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(registerResponse.statusCode).toBe(201);
     const registerCookie = extractCookie(registerResponse.headers["set-cookie"]);
+    const rawSetCookie = String(
+      Array.isArray(registerResponse.headers["set-cookie"])
+        ? registerResponse.headers["set-cookie"][0]
+        : registerResponse.headers["set-cookie"]
+    ).toLowerCase();
+    expect(rawSetCookie).toContain("httponly");
+    expect(rawSetCookie).toContain("samesite=lax");
 
     const meResponse = await app.inject({
       method: "GET",
@@ -745,6 +764,153 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
 
     expect(nonOwnerDownload.statusCode).toBe(404);
+  });
+
+  it("supports collections/tags, position search, opening tree, and stored engine lines", async () => {
+    const user = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "feature-suite@example.com",
+        password: "passwordFeatureSuite!",
+      },
+    });
+    const cookie = extractCookie(user.headers["set-cookie"]);
+
+    const createGame = await app.inject({
+      method: "POST",
+      url: "/api/games",
+      headers: { cookie },
+      payload: {
+        white: "Feature White",
+        black: "Feature Black",
+        result: "1-0",
+        movesHash: "feature-suite-hash-1",
+        pgn: "[Event \"Feature\"]\n\n1. e4 e5 2. Nf3 Nc6 1-0",
+        moveTree: {
+          mainline: ["e4", "e5", "Nf3", "Nc6"],
+        },
+      },
+    });
+    expect(createGame.statusCode).toBe(201);
+    const gameId = createGame.json().id as number;
+
+    const tag = await app.inject({
+      method: "POST",
+      url: "/api/tags",
+      headers: { cookie },
+      payload: {
+        name: "Sharp",
+        color: "#ff0000",
+      },
+    });
+    expect(tag.statusCode).toBe(201);
+    const tagId = tag.json().id as number;
+
+    const assignTag = await app.inject({
+      method: "POST",
+      url: `/api/games/${gameId}/tags/${tagId}`,
+      headers: { cookie },
+    });
+    expect(assignTag.statusCode).toBe(201);
+
+    const collection = await app.inject({
+      method: "POST",
+      url: "/api/collections",
+      headers: { cookie },
+      payload: {
+        name: "Prep",
+      },
+    });
+    expect(collection.statusCode).toBe(201);
+    const collectionId = collection.json().id as number;
+
+    const addToCollection = await app.inject({
+      method: "POST",
+      url: `/api/collections/${collectionId}/games`,
+      headers: { cookie },
+      payload: {
+        gameIds: [gameId],
+      },
+    });
+    expect(addToCollection.statusCode).toBe(200);
+
+    const filteredByTag = await app.inject({
+      method: "GET",
+      url: `/api/games?tagId=${tagId}`,
+      headers: { cookie },
+    });
+    expect(filteredByTag.statusCode).toBe(200);
+    expect(filteredByTag.json().items).toHaveLength(1);
+
+    const filteredByCollection = await app.inject({
+      method: "GET",
+      url: `/api/games?collectionId=${collectionId}`,
+      headers: { cookie },
+    });
+    expect(filteredByCollection.statusCode).toBe(200);
+    expect(filteredByCollection.json().items).toHaveLength(1);
+
+    const initialFen = "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5";
+    const analysis = await app.inject({
+      method: "POST",
+      url: "/api/analysis",
+      headers: { cookie },
+      payload: {
+        fen: initialFen,
+        depth: 8,
+      },
+    });
+    expect(analysis.statusCode).toBe(201);
+
+    const positionSearch = await app.inject({
+      method: "POST",
+      url: "/api/search/position",
+      headers: { cookie },
+      payload: {
+        fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+      },
+    });
+    expect(positionSearch.statusCode).toBe(200);
+    expect(positionSearch.json().items.length).toBeGreaterThan(0);
+
+    const openingTree = await app.inject({
+      method: "GET",
+      url: "/api/openings/tree?fen=rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1&depth=2",
+      headers: { cookie },
+    });
+    expect(openingTree.statusCode).toBe(200);
+
+    const saveLine = await app.inject({
+      method: "POST",
+      url: "/api/analysis/store",
+      headers: { cookie },
+      payload: {
+        gameId,
+        ply: 2,
+        fen: "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+        depth: 16,
+        pvUci: ["g1f3", "b8c6"],
+        evalCp: 24,
+      },
+    });
+    expect(saveLine.statusCode).toBe(201);
+    const lineId = saveLine.json().id as number;
+
+    const getLines = await app.inject({
+      method: "GET",
+      url: `/api/games/${gameId}/engine-lines?ply=2`,
+      headers: { cookie },
+    });
+    expect(getLines.statusCode).toBe(200);
+    expect(getLines.json().items).toHaveLength(1);
+
+    const deleteLine = await app.inject({
+      method: "DELETE",
+      url: `/api/engine-lines/${lineId}`,
+      headers: { cookie },
+    });
+    expect(deleteLine.statusCode).toBe(204);
   });
   }
 );

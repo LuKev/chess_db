@@ -26,6 +26,22 @@ const EnvSchema = z.object({
   API_METRICS_PATH: z.string().min(1).default("/metrics"),
   API_SENTRY_DSN: z.string().trim().optional(),
   API_SENTRY_ENV: z.string().trim().optional(),
+  PUBLIC_API_ORIGIN: z.string().trim().optional(),
+  PUBLIC_WEB_ORIGIN: z.string().trim().optional(),
+  ENFORCE_PRODUCTION_TOPOLOGY: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  SMTP_HOST: z.string().trim().optional(),
+  SMTP_PORT: z.coerce.number().int().positive().optional(),
+  SMTP_USER: z.string().trim().optional(),
+  SMTP_PASS: z.string().trim().optional(),
+  SMTP_SECURE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  PASSWORD_RESET_FROM: z.string().trim().optional(),
+  PASSWORD_RESET_BASE_URL: z.string().trim().optional(),
   UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
   AUTO_MIGRATE: z
     .enum(["true", "false"])
@@ -53,6 +69,16 @@ export type AppConfig = {
   apiMetricsPath: string;
   sentryDsn: string | null;
   sentryEnvironment: string;
+  publicApiOrigin: string | null;
+  publicWebOrigin: string | null;
+  enforceProductionTopology: boolean;
+  smtpHost: string | null;
+  smtpPort: number | null;
+  smtpUser: string | null;
+  smtpPass: string | null;
+  smtpSecure: boolean;
+  passwordResetFrom: string | null;
+  passwordResetBaseUrl: string | null;
   uploadMaxBytes: number;
   autoMigrate: boolean;
 };
@@ -90,6 +116,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       : null,
     sentryEnvironment:
       parsed.data.API_SENTRY_ENV?.trim() || parsed.data.NODE_ENV,
+    publicApiOrigin: parsed.data.PUBLIC_API_ORIGIN?.trim()
+      ? parsed.data.PUBLIC_API_ORIGIN.trim()
+      : null,
+    publicWebOrigin: parsed.data.PUBLIC_WEB_ORIGIN?.trim()
+      ? parsed.data.PUBLIC_WEB_ORIGIN.trim()
+      : null,
+    enforceProductionTopology: parsed.data.ENFORCE_PRODUCTION_TOPOLOGY,
+    smtpHost: parsed.data.SMTP_HOST?.trim() ? parsed.data.SMTP_HOST.trim() : null,
+    smtpPort: parsed.data.SMTP_PORT ?? null,
+    smtpUser: parsed.data.SMTP_USER?.trim() ? parsed.data.SMTP_USER.trim() : null,
+    smtpPass: parsed.data.SMTP_PASS?.trim() ? parsed.data.SMTP_PASS.trim() : null,
+    smtpSecure: parsed.data.SMTP_SECURE,
+    passwordResetFrom: parsed.data.PASSWORD_RESET_FROM?.trim()
+      ? parsed.data.PASSWORD_RESET_FROM.trim()
+      : null,
+    passwordResetBaseUrl: parsed.data.PASSWORD_RESET_BASE_URL?.trim()
+      ? parsed.data.PASSWORD_RESET_BASE_URL.trim()
+      : null,
     uploadMaxBytes: parsed.data.UPLOAD_MAX_BYTES,
     autoMigrate: parsed.data.AUTO_MIGRATE,
   };

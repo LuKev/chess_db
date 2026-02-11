@@ -3,12 +3,30 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { requireUser } from "../auth.js";
 import type { AnalysisQueue } from "../infrastructure/queue.js";
+import { normalizeFen } from "../chess/fen.js";
 
 const CreateAnalysisSchema = z.object({
   fen: z.string().trim().min(1).max(2048),
   depth: z.number().int().min(1).max(40).default(18),
   nodes: z.number().int().positive().max(50_000_000).optional(),
   timeMs: z.number().int().positive().max(120_000).optional(),
+  engine: z.string().trim().min(1).max(64).default("stockfish"),
+});
+
+const StoreAnalysisSchema = z.object({
+  gameId: z.number().int().positive(),
+  ply: z.number().int().min(0),
+  fen: z.string().trim().min(1).max(2048),
+  engine: z.string().trim().min(1).max(64).default("stockfish"),
+  depth: z.number().int().min(1).max(60).optional(),
+  multipv: z.number().int().min(1).max(20).optional(),
+  pvUci: z.array(z.string().trim().min(2).max(8)).default([]),
+  pvSan: z.array(z.string().trim().min(1).max(32)).default([]),
+  evalCp: z.number().int().optional(),
+  evalMate: z.number().int().optional(),
+  nodes: z.number().int().nonnegative().optional(),
+  timeMs: z.number().int().nonnegative().optional(),
+  source: z.string().trim().min(1).max(64).default("manual"),
 });
 
 function toId(value: number | string): number {
@@ -33,6 +51,12 @@ export async function registerAnalysisRoutes(
     }
 
     const payload = parsed.data;
+    let fenNorm: string;
+    try {
+      fenNorm = normalizeFen(payload.fen).fenNorm;
+    } catch (error) {
+      return reply.status(400).send({ error: String(error) });
+    }
     const inFlightCount = await pool.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total
        FROM engine_requests
@@ -44,6 +68,71 @@ export async function registerAnalysisRoutes(
     if (Number(inFlightCount.rows[0].total) >= 3) {
       return reply.status(429).send({
         error: "Too many in-flight analysis requests. Please wait for current jobs to finish.",
+      });
+    }
+
+    const cachedLine = await pool.query<{
+      best_move: string | null;
+      pv_uci: string[] | null;
+      eval_cp: number | null;
+      eval_mate: number | null;
+      depth: number | null;
+      nodes: number | null;
+      time_ms: number | null;
+    }>(
+      `SELECT
+        CASE WHEN array_length(pv_uci, 1) > 0 THEN pv_uci[1] ELSE NULL END AS best_move,
+        pv_uci,
+        eval_cp,
+        eval_mate,
+        depth,
+        nodes,
+        time_ms
+      FROM engine_lines
+      WHERE user_id = $1
+        AND fen_norm = $2
+        AND engine = $3
+        AND ($4::int IS NULL OR depth >= $4::int)
+      ORDER BY depth DESC NULLS LAST, created_at DESC
+      LIMIT 1`,
+      [request.user!.id, fenNorm, payload.engine, payload.depth ?? null]
+    );
+
+    if (cachedLine.rowCount) {
+      const cached = cachedLine.rows[0];
+      const createResult = await pool.query<{ id: number | string }>(
+        `INSERT INTO engine_requests (
+          user_id,
+          status,
+          fen,
+          depth,
+          nodes,
+          time_ms,
+          best_move,
+          principal_variation,
+          eval_cp,
+          eval_mate
+        ) VALUES (
+          $1, 'completed', $2, $3, $4, $5, $6, $7, $8, $9
+        )
+        RETURNING id`,
+        [
+          request.user!.id,
+          payload.fen,
+          cached.depth ?? payload.depth,
+          cached.nodes ?? payload.nodes ?? null,
+          cached.time_ms ?? payload.timeMs ?? null,
+          cached.best_move,
+          (cached.pv_uci ?? []).join(" "),
+          cached.eval_cp,
+          cached.eval_mate,
+        ]
+      );
+      const analysisRequestId = toId(createResult.rows[0].id);
+      return reply.status(201).send({
+        id: analysisRequestId,
+        status: "completed",
+        cached: true,
       });
     }
 
@@ -80,6 +169,78 @@ export async function registerAnalysisRoutes(
       return reply.status(500).send({ error: "Failed to enqueue analysis request" });
     }
   });
+
+  app.post(
+    "/api/analysis/store",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const parsed = StoreAnalysisSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten(),
+        });
+      }
+
+      let fenNorm: string;
+      try {
+        fenNorm = normalizeFen(parsed.data.fen).fenNorm;
+      } catch (error) {
+        return reply.status(400).send({ error: String(error) });
+      }
+
+      const gameOwnership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [parsed.data.gameId, request.user!.id]
+      );
+      if (!gameOwnership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+
+      const result = await pool.query<{ id: number | string; created_at: Date }>(
+        `INSERT INTO engine_lines (
+          user_id,
+          game_id,
+          ply,
+          fen_norm,
+          engine,
+          depth,
+          multipv,
+          pv_uci,
+          pv_san,
+          eval_cp,
+          eval_mate,
+          nodes,
+          time_ms,
+          source
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8::text[], $9::text[], $10, $11, $12, $13, $14
+        )
+        RETURNING id, created_at`,
+        [
+          request.user!.id,
+          parsed.data.gameId,
+          parsed.data.ply,
+          fenNorm,
+          parsed.data.engine,
+          parsed.data.depth ?? null,
+          parsed.data.multipv ?? null,
+          parsed.data.pvUci,
+          parsed.data.pvSan,
+          parsed.data.evalCp ?? null,
+          parsed.data.evalMate ?? null,
+          parsed.data.nodes ?? null,
+          parsed.data.timeMs ?? null,
+          parsed.data.source,
+        ]
+      );
+
+      return reply.status(201).send({
+        id: toId(result.rows[0].id),
+        createdAt: result.rows[0].created_at.toISOString(),
+      });
+    }
+  );
 
   app.get<{ Params: { id: string } }>(
     "/api/analysis/:id",
