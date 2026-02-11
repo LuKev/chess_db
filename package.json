@@ -16,7 +16,9 @@
     "migrate:api": "npm --workspace @chessdb/api run migrate",
     "bench:import": "node scripts/bench_import_throughput.mjs",
     "bench:queries": "node scripts/bench_query_latency.mjs",
-    "bench:all": "npm run bench:import && npm run bench:queries"
+    "bench:slo": "node scripts/bench_api_slo.mjs",
+    "verify:backfill": "node scripts/verify_backfill_completeness.mjs",
+    "bench:all": "npm run bench:import && npm run bench:queries && npm run bench:slo"
   },
   "engines": {
     "node": ">=20.0.0"

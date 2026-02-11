@@ -1,0 +1,152 @@
+# Deployment Notes
+
+1. Temporary approach: local git `post-push` hook auto-deploys Railway services after pushes to `main`.
+2. TODO: migrate to Railway native GitHub source deploys (`web`, `api`, `worker`) once Railway GitHub connector can resolve `LuKev/chess_db` reliably.
+3. Sprint 1 foundation implementation added:
+   - API env validation (`DATABASE_URL`, `SESSION_SECRET`, etc.) with fail-fast parsing.
+   - SQL migration runner (`apps/api/src/migrations.ts`) and initial schema in `apps/api/migrations/0001_initial.sql`.
+   - Auth/session routes (`/api/auth/register`, `/api/auth/login`, `/api/auth/me`, `/api/auth/logout`) with Argon2id password hashing and DB-backed sessions.
+   - Tenant-scoped game/filter APIs (`/api/games`, `/api/games/:id`, `/api/filters`).
+   - CI workflow (`.github/workflows/ci.yml`) for lint/test/typecheck with Postgres service.
+4. Integration tests in `apps/api/test/auth_games.integration.test.ts` require `DATABASE_URL`; they intentionally skip when unset. CI sets `DATABASE_URL`, so tests execute there.
+5. Local Codex environment note: early in this session `docker` was unavailable, but this was resolved by installing Docker CLI + Colima (see note 6).
+6. Docker runtime and CLI were installed in this workspace session via Homebrew (`docker`, `docker-compose`, `docker-buildx`, `colima`) and initialized with `colima start`; `docker compose` now works.
+7. Sprint 2 import pipeline now implemented:
+   - `POST /api/imports` stores uploads to MinIO/S3-compatible storage and enqueues import jobs.
+   - Worker consumes import jobs from Redis (BullMQ), parses PGN, supports `.pgn.zst` streaming decompression via `fzstd`, applies dedupe, and writes `import_errors`.
+   - Import status/list endpoints are available (`GET /api/imports`, `GET /api/imports/:id`).
+8. Engine analysis queue implemented:
+   - API routes: `POST /api/analysis`, `GET /api/analysis/:id`, `POST /api/analysis/:id/cancel`.
+   - Worker runs Stockfish for queued analysis jobs and persists best move, PV, and eval.
+   - New migration `0002_engine_requests_annotations.sql` adds `engine_requests` and `user_annotations`.
+9. Worker integration tests now cover both import and analysis processors (`apps/worker/test/process_import_job.integration.test.ts`, `apps/worker/test/process_analysis_job.integration.test.ts`).
+10. Export queue implemented with API and worker flow:
+   - API: `POST /api/exports`, `GET /api/exports`, `GET /api/exports/:id`.
+   - Worker: `processExportJob` writes PGN export artifacts to object storage.
+   - Migration `0003_export_jobs.sql` adds export job tracking schema.
+11. Viewer/analysis/export UX hardening added:
+   - API: `GET /api/games/:id/pgn`, annotations `GET/PUT /api/games/:id/annotations`, SSE `GET /api/analysis/:id/stream`, and `GET /api/exports/:id/download`.
+   - Web UI now includes richer viewer controls, line/variation selector, annotation persistence fields, near-real-time engine stream updates, and export download links.
+12. Password reset flow implemented:
+   - Endpoints: `POST /api/auth/password-reset/request`, `POST /api/auth/password-reset/confirm`.
+   - New migration `0004_password_reset_tokens.sql` stores hashed reset tokens with expiry/usage fields.
+13. Export include-annotations toggle is now implemented end-to-end:
+   - `includeAnnotations` API payload maps to `export_jobs.include_annotations`.
+   - Worker appends serialized annotations as PGN comment lines when enabled.
+14. Runtime gotcha: BullMQ version in this workspace rejects `jobId` values containing `:`. Queue job IDs must use `-` (e.g. `import-123`) or enqueue fails at runtime.
+15. Runtime gotcha: MinIO rejects unknown-length stream uploads for plain `PutObject` (`MissingContentLength`). API upload path now uses `@aws-sdk/lib-storage` `Upload` for multipart stream-safe uploads.
+16. Observability baseline added:
+   - API Prometheus metrics endpoint (`/metrics`) with request counters/latency.
+   - Worker Prometheus endpoint (`WORKER_METRICS_PORT`, default `9465`) with job counters/duration and queue depth gauges.
+   - Optional Sentry hooks for API/worker via `API_SENTRY_DSN` and `WORKER_SENTRY_DSN`.
+   - Local Prometheus/Grafana + alert rules in `ops/observability/`.
+17. Performance harness scripts added:
+   - `scripts/bench_import_throughput.mjs` and `scripts/bench_query_latency.mjs`.
+   - Baseline run results are recorded in `docs/performance_baseline.md`.
+18. Railway production deploy requirement:
+   - `api` and `worker` now require S3-related env vars at boot (`S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`) and `api` also requires `SESSION_SECRET`.
+   - Missing these variables causes immediate startup crash on Railway.
+   - Current Railway production was set with placeholder S3 credentials to restore service boot; replace with real object-storage credentials for import/export to work correctly.
+19. ChessBase-like feature expansion landed via migration `0005_chessbase_features.sql`:
+   - Added `game_positions`, `opening_stats`, `engine_lines`, `collections`, `collection_games`, `tags`, `game_tags`.
+   - Upgraded `user_annotations` with `schema_version` and `move_notes`.
+   - Extended `games` with `canonical_pgn_hash`, `white_elo`, `black_elo`.
+   - Extended `import_jobs` with strict dedupe mode + per-reason duplicate counters.
+20. Import pipeline now indexes each game position and opening transitions during ingest:
+   - Worker writes `game_positions` and incremental `opening_stats` from mainline SAN.
+   - Strict duplicate mode is supported through `POST /api/imports?strictDuplicate=true`, with diagnostics for `duplicate_by_moves` and `duplicate_by_canonical`.
+21. New API feature surface implemented:
+   - Position search: `POST /api/search/position`, `POST /api/search/position/material`.
+   - Opening explorer: `GET /api/openings/tree`.
+   - Engine line persistence: `POST /api/analysis/store`, `GET /api/games/:id/engine-lines`, `DELETE /api/engine-lines/:id`.
+   - Collections/tags CRUD and assignment endpoints, including `POST/DELETE /api/games/:id/tags/:tagId`.
+   - Backfill jobs: `POST /api/backfill/positions`, `POST /api/backfill/openings`.
+22. Worker now processes two new idempotent backfill queues:
+   - `position_backfill` fills missing `game_positions` and opening aggregates.
+   - `opening_aggregate_backfill` rebuilds `opening_stats` from indexed positions.
+23. Production auth/storage hardening added:
+   - API startup validates same-site production topology (`PUBLIC_API_ORIGIN`, `PUBLIC_WEB_ORIGIN`, `CORS_ORIGIN`) when `ENFORCE_PRODUCTION_TOPOLOGY=true`.
+   - API and worker now perform eager S3 bucket validation at startup (`ensureBucket`) to fail fast on invalid credentials.
+   - Password reset now supports real SMTP email delivery (via Nodemailer); production requires SMTP/password-reset env vars.
+24. Deployment smoke checks:
+   - Added `scripts/smoke_post_deploy.mjs` (health + register/login/me + import enqueue/status).
+   - Railway deploy workflow now runs smoke checks and expects `SMOKE_API_BASE_URL` GitHub secret.
+25. New optional startup override for storage checks:
+   - `S3_STARTUP_CHECK_STRICT=true` (default) enforces fail-fast S3 validation at boot.
+   - Setting `S3_STARTUP_CHECK_STRICT=false` allows API/worker boot in degraded mode when S3 credentials are intentionally placeholder during rollout.
+26. GCP CLI state for production object storage wiring:
+   - `gcloud` is installed locally and authenticated as `lu.kevin2@gmail.com`.
+   - Only visible project is `gen-lang-client-0892480257`.
+   - Project billing is currently disabled (`gcloud beta billing projects describe ...` => `billingEnabled: false`), which blocks Cloud Storage bucket creation.
+27. Service account and interoperability key bootstrap:
+   - Service account `chess-db-s3@gen-lang-client-0892480257.iam.gserviceaccount.com` was created.
+   - A temporary GCS HMAC key was created during setup testing and then deleted; final setup should generate a fresh key during `scripts/setup_gcs_s3_railway.sh`.
+28. Added automation helper script and docs for GCS->Railway S3 wiring:
+   - Script: `scripts/setup_gcs_s3_railway.sh`
+   - Doc: `docs/gcs_s3_railway.md`
+   - Script exits early with clear instructions when billing is disabled.
+29. Final GCS/Railway storage wiring completed (2026-02-11):
+   - Billing was enabled on `gen-lang-client-0892480257`, then `scripts/setup_gcs_s3_railway.sh` ran successfully.
+   - Created bucket: `gs://chess-db-gen-lang-client-0892480257`.
+   - Set fresh GCS HMAC S3 credentials into Railway `api` and `worker` (`S3_ENDPOINT=https://storage.googleapis.com`, `S3_REGION=auto`, path style true).
+   - Redeploys for both services succeeded and smoke test passed against `https://api-production-d291.up.railway.app`.
+   - `https://api.kezilu.com` did not resolve from local DNS at time of verification (`ENOTFOUND`), so custom-domain DNS/propagation should be validated separately.
+30. Security/reliability hardening tranche completed (2026-02-11):
+   - Added migration `0006_security_hardening.sql`:
+     - New `audit_events` table + indexes.
+     - Idempotency columns and unique partial indexes for `import_jobs`, `engine_requests`, and `export_jobs`.
+   - API now logs audit events for auth/import/export/analysis/backfill routes on response.
+   - Added production CSRF origin enforcement for mutating cookie-auth requests (`ENFORCE_CSRF_ORIGIN_CHECK`).
+   - Added Redis-backed auth endpoint brute-force rate limiting knobs (`AUTH_RATE_LIMIT_*`), disabled automatically in `NODE_ENV=test`.
+   - Added `Idempotency-Key` support for `POST /api/imports`, `POST /api/analysis`, and `POST /api/exports` with replay-safe 200 responses.
+   - Added integration tests for idempotency replay and auth audit logging.
+31. Queue reliability tranche completed (2026-02-11):
+   - Added migration `0007_dead_letters.sql` with `queue_dead_letters` table/indexes.
+   - Queue enqueue path now supports retry/backoff env controls:
+     - `QUEUE_JOB_ATTEMPTS` (default 3)
+     - `QUEUE_JOB_BACKOFF_MS` (default 1000, exponential)
+   - Worker now writes final (post-retry) failed jobs into `queue_dead_letters` for import/analysis/export/backfill queues.
+   - Added tenant-scoped dead-letter inspection API: `GET /api/ops/dead-letters`.
+   - Added integration test coverage for dead-letter listing and user isolation.
+32. Saved filter productization tranche completed (2026-02-11):
+   - Added migration `0008_saved_filter_sharing.sql` to store per-filter `share_token` with unique index.
+   - Added server-driven presets endpoint: `GET /api/filters/presets`.
+   - Added shared-filter retrieval endpoint (tenant scoped): `GET /api/filters/shared/:token`.
+   - Saved filter create/list responses now include `shareToken`.
+   - Web UI now supports:
+     - Applying built-in presets.
+     - Copying share links for saved filters (`?sharedFilter=<token>`).
+     - Auto-applying shared filter links after sign-in.
+33. Added query planner regression integration tests:
+   - New test file: `apps/api/test/query_planner.integration.test.ts`.
+   - Covers index-backed plans for:
+     - Games metadata eco query.
+     - Position lookup (`game_positions_user_fen_idx`).
+     - Opening tree lookup (`opening_stats_user_position_idx`).
+34. Productization follow-up tranche completed (2026-02-11):
+   - API additions:
+     - `GET /api/imports/:id/errors` with pagination for parse diagnostics.
+     - Bulk tag assignment/removal endpoints:
+       - `POST /api/tags/:id/games`
+       - `DELETE /api/tags/:id/games`
+   - Position material search response now includes game metadata/snippet fields (aligned with exact position search) to support direct viewer workflows in UI.
+   - Web UI improvements:
+     - Position search mode switch (`exact` vs `material`) with optional material key and side-to-move controls.
+     - Opening explorer “Dive” now also runs exact position search and attempts to jump the current viewer cursor to the matching FEN.
+     - Import jobs section now has diagnostics drill-down (parse error table) via `/api/imports/:id/errors`.
+     - Bulk collection/tag actions now support both add and remove paths from selected games.
+   - Added integration coverage in `apps/api/test/auth_games.integration.test.ts` for:
+     - CSRF origin enforcement on authenticated mutating requests.
+     - Production topology mismatch startup guard.
+     - Import diagnostics endpoint.
+     - Bulk tag assignment/removal and enriched material search payload.
+35. UX polish tranche completed (2026-02-11):
+   - Game viewer now supports keyboard-first navigation:
+     - `ArrowLeft` / `ArrowRight` step moves.
+     - `Home` / `End` jump to start/end.
+     - `Space` toggles autoplay.
+     - Hotkeys are disabled while focus is in inputs/textareas/selects/contenteditable.
+   - Added persistent “recently viewed games” list in web UI:
+     - Stored client-side in `localStorage` key `chessdb_recent_games`.
+     - Auto-updated on each `openGameViewer` call.
+     - Provides one-click reopen actions in the Game Viewer section.

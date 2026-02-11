@@ -48,6 +48,8 @@ Benchmark harness:
 ```bash
 npm run bench:import
 npm run bench:queries
+npm run bench:slo
+npm run verify:backfill
 ```
 
 Notes:
@@ -115,7 +117,7 @@ Notes:
 9. Collections and Tags:
    - `POST/GET/PATCH/DELETE /api/collections`
    - `POST/DELETE /api/collections/:id/games`
-   - `POST/GET/DELETE /api/tags`
+   - `POST/GET/PATCH/DELETE /api/tags`
    - `POST/DELETE /api/games/:id/tags/:tagId`
    - `POST/DELETE /api/tags/:id/games`
 10. Backfills:
@@ -201,3 +203,9 @@ Automated setup (creates bucket + service account + HMAC + Railway env vars + re
 ```
 
 Detailed steps and troubleshooting are in `docs/gcs_s3_railway.md`.
+
+## Release Ops Artifacts
+
+1. Release checklist: `docs/release_readiness_checklist.md`
+2. Rollback playbook: `docs/rollback_playbook.md`
+3. Nightly SLO workflow: `.github/workflows/nightly-slo.yml`

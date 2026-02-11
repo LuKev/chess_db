@@ -25,7 +25,10 @@ jobs:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_PROJECT_ID: aea9db8b-a434-4826-864e-4869ed452dbe
       RAILWAY_ENVIRONMENT_ID: 46109543-4ee7-4b19-a824-4835282e2358
-      SMOKE_API_BASE_URL: ${{ secrets.SMOKE_API_BASE_URL }}
+      SMOKE_API_BASE_URL: https://api.kezilu.com
+      RELEASE_REQUIRED_API_ORIGIN: https://api.kezilu.com
+      PLAYWRIGHT_BASE_URL: https://kezilu.com/chess_db
+      E2E_API_ORIGIN: https://api.kezilu.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,3 +58,9 @@ jobs:
 
       - name: Post-deploy smoke checks
         run: node scripts/smoke_post_deploy.mjs
+
+      - name: Install Playwright Chromium
+        run: npm --workspace @chessdb/web exec playwright install --with-deps chromium
+
+      - name: Run Browser E2E
+        run: npm --workspace @chessdb/web run test:e2e -- --reporter=list

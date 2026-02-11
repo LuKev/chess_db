@@ -1,0 +1,55 @@
+name: Nightly SLO Checks
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  latency:
+    runs-on: ubuntu-latest
+    env:
+      API_BASE_URL: https://api.kezilu.com
+      BENCH_STRICT: "true"
+      BENCH_SLO_GAMES: "350"
+      BENCH_SLO_REQUESTS: "180"
+      BENCH_EMAIL: ${{ secrets.SLO_BENCH_EMAIL }}
+      BENCH_PASSWORD: ${{ secrets.SLO_BENCH_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run API SLO benchmark
+        run: npm run bench:slo
+
+  backfill:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.BACKFILL_VERIFY_DATABASE_URL != '' }}
+    env:
+      DATABASE_URL: ${{ secrets.BACKFILL_VERIFY_DATABASE_URL }}
+      BACKFILL_VERIFY_STRICT: "true"
+      BACKFILL_ACTIVE_WINDOW_DAYS: "90"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify backfill completeness
+        run: npm run verify:backfill
