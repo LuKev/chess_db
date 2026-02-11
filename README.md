@@ -7,6 +7,7 @@ Planning docs:
 1. `docs/mvp_spec.md`
 2. `docs/build_backlog_plan.md`
 3. `docs/railway_setup.md`
+4. `docs/gcs_s3_railway.md`
 
 ## Monorepo Layout
 
@@ -176,3 +177,15 @@ If you already use a Cloudflare Worker router on `kezilu.com` (as in `tm_server/
 If you are not using a Cloudflare Worker router, you need an edge/proxy rule to forward `/chess_db*` to the Railway web service.
 
 If Railway path routing is limited in your plan/region, route by subdomain (for example `chessdb.kezilu.com`) and use your site proxy to rewrite `/chess_db -> https://chessdb.kezilu.com`.
+
+## GCS as S3-Compatible Storage
+
+This app uses an S3-compatible API for import/export object storage. Google Cloud Storage supports this via interoperability (HMAC) keys.
+
+Automated setup (creates bucket + service account + HMAC + Railway env vars + redeploy):
+
+```bash
+./scripts/setup_gcs_s3_railway.sh
+```
+
+Detailed steps and troubleshooting are in `docs/gcs_s3_railway.md`.

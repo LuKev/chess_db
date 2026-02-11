@@ -74,3 +74,14 @@
 25. New optional startup override for storage checks:
    - `S3_STARTUP_CHECK_STRICT=true` (default) enforces fail-fast S3 validation at boot.
    - Setting `S3_STARTUP_CHECK_STRICT=false` allows API/worker boot in degraded mode when S3 credentials are intentionally placeholder during rollout.
+26. GCP CLI state for production object storage wiring:
+   - `gcloud` is installed locally and authenticated as `lu.kevin2@gmail.com`.
+   - Only visible project is `gen-lang-client-0892480257`.
+   - Project billing is currently disabled (`gcloud beta billing projects describe ...` => `billingEnabled: false`), which blocks Cloud Storage bucket creation.
+27. Service account and interoperability key bootstrap:
+   - Service account `chess-db-s3@gen-lang-client-0892480257.iam.gserviceaccount.com` was created.
+   - A temporary GCS HMAC key was created during setup testing and then deleted; final setup should generate a fresh key during `scripts/setup_gcs_s3_railway.sh`.
+28. Added automation helper script and docs for GCS->Railway S3 wiring:
+   - Script: `scripts/setup_gcs_s3_railway.sh`
+   - Doc: `docs/gcs_s3_railway.md`
+   - Script exits early with clear instructions when billing is disabled.
