@@ -4,6 +4,7 @@ import type { Readable } from "node:stream";
 import type { Pool } from "pg";
 import { requireUser } from "../auth.js";
 import type { AppConfig } from "../config.js";
+import { parseIdempotencyKey } from "../http/idempotency.js";
 import type { ImportQueue } from "../infrastructure/queue.js";
 import {
   buildImportObjectKey,
@@ -59,6 +60,38 @@ export async function registerImportRoutes(
       });
     }
 
+    const parsedIdempotency = parseIdempotencyKey(request.headers["idempotency-key"]);
+    if (parsedIdempotency.error) {
+      return reply.status(400).send({ error: parsedIdempotency.error });
+    }
+    const idempotencyKey = parsedIdempotency.key;
+    if (idempotencyKey) {
+      const existing = await pool.query<{
+        id: number | string;
+        status: string;
+        source_object_key: string | null;
+        strict_duplicate_mode: boolean;
+      }>(
+        `SELECT id, status, source_object_key, strict_duplicate_mode
+         FROM import_jobs
+         WHERE user_id = $1
+           AND idempotency_key = $2
+         ORDER BY id DESC
+         LIMIT 1`,
+        [request.user!.id, idempotencyKey]
+      );
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        return reply.status(200).send({
+          id: toId(row.id),
+          status: row.status,
+          objectKey: row.source_object_key,
+          strictDuplicateMode: row.strict_duplicate_mode,
+          idempotentReplay: true,
+        });
+      }
+    }
+
     const file = await request.file();
     if (!file) {
       return reply.status(400).send({ error: "Missing upload file" });
@@ -78,14 +111,45 @@ export async function registerImportRoutes(
       });
     }
 
-    const createJobResult = await pool.query<{ id: number | string }>(
-      `INSERT INTO import_jobs (user_id, status, strict_duplicate_mode)
-       VALUES ($1, 'queued', $2)
-       RETURNING id`,
-      [request.user!.id, createQuery.data.strictDuplicate ?? false]
-    );
+    let importJobId: number;
+    try {
+      const createJobResult = await pool.query<{ id: number | string }>(
+        `INSERT INTO import_jobs (user_id, status, strict_duplicate_mode, idempotency_key)
+         VALUES ($1, 'queued', $2, $3)
+         RETURNING id`,
+        [request.user!.id, createQuery.data.strictDuplicate ?? false, idempotencyKey]
+      );
+      importJobId = toId(createJobResult.rows[0].id);
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505" && idempotencyKey) {
+        const existing = await pool.query<{
+          id: number | string;
+          status: string;
+          source_object_key: string | null;
+          strict_duplicate_mode: boolean;
+        }>(
+          `SELECT id, status, source_object_key, strict_duplicate_mode
+           FROM import_jobs
+           WHERE user_id = $1
+             AND idempotency_key = $2
+           ORDER BY id DESC
+           LIMIT 1`,
+          [request.user!.id, idempotencyKey]
+        );
+        if (existing.rowCount) {
+          const row = existing.rows[0];
+          return reply.status(200).send({
+            id: toId(row.id),
+            status: row.status,
+            objectKey: row.source_object_key,
+            strictDuplicateMode: row.strict_duplicate_mode,
+            idempotentReplay: true,
+          });
+        }
+      }
+      throw error;
+    }
 
-    const importJobId = toId(createJobResult.rows[0].id);
     const objectKey = buildImportObjectKey({
       userId: request.user!.id,
       importJobId,

@@ -36,6 +36,25 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((value) => value === "true"),
+  ENFORCE_CSRF_ORIGIN_CHECK: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  AUTH_RATE_LIMIT_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(300),
+  AUTH_RATE_LIMIT_LOGIN_IP_MAX: z.coerce.number().int().positive().default(20),
+  AUTH_RATE_LIMIT_LOGIN_EMAIL_MAX: z.coerce.number().int().positive().default(10),
+  AUTH_RATE_LIMIT_REGISTER_IP_MAX: z.coerce.number().int().positive().default(10),
+  AUTH_RATE_LIMIT_PASSWORD_RESET_IP_MAX: z.coerce.number().int().positive().default(10),
+  AUTH_RATE_LIMIT_PASSWORD_RESET_EMAIL_MAX: z.coerce.number().int().positive().default(5),
+  AUTH_RATE_LIMIT_PASSWORD_RESET_CONFIRM_IP_MAX: z
+    .coerce.number()
+    .int()
+    .positive()
+    .default(10),
   SMTP_HOST: z.string().trim().optional(),
   SMTP_PORT: z.coerce.number().int().positive().optional(),
   SMTP_USER: z.string().trim().optional(),
@@ -77,6 +96,15 @@ export type AppConfig = {
   publicApiOrigin: string | null;
   publicWebOrigin: string | null;
   enforceProductionTopology: boolean;
+  enforceCsrfOriginCheck: boolean;
+  authRateLimitEnabled: boolean;
+  authRateLimitWindowSeconds: number;
+  authRateLimitLoginIpMax: number;
+  authRateLimitLoginEmailMax: number;
+  authRateLimitRegisterIpMax: number;
+  authRateLimitPasswordResetIpMax: number;
+  authRateLimitPasswordResetEmailMax: number;
+  authRateLimitPasswordResetConfirmIpMax: number;
   smtpHost: string | null;
   smtpPort: number | null;
   smtpUser: string | null;
@@ -129,6 +157,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       ? parsed.data.PUBLIC_WEB_ORIGIN.trim()
       : null,
     enforceProductionTopology: parsed.data.ENFORCE_PRODUCTION_TOPOLOGY,
+    enforceCsrfOriginCheck: parsed.data.ENFORCE_CSRF_ORIGIN_CHECK,
+    authRateLimitEnabled: parsed.data.AUTH_RATE_LIMIT_ENABLED,
+    authRateLimitWindowSeconds: parsed.data.AUTH_RATE_LIMIT_WINDOW_SECONDS,
+    authRateLimitLoginIpMax: parsed.data.AUTH_RATE_LIMIT_LOGIN_IP_MAX,
+    authRateLimitLoginEmailMax: parsed.data.AUTH_RATE_LIMIT_LOGIN_EMAIL_MAX,
+    authRateLimitRegisterIpMax: parsed.data.AUTH_RATE_LIMIT_REGISTER_IP_MAX,
+    authRateLimitPasswordResetIpMax: parsed.data.AUTH_RATE_LIMIT_PASSWORD_RESET_IP_MAX,
+    authRateLimitPasswordResetEmailMax:
+      parsed.data.AUTH_RATE_LIMIT_PASSWORD_RESET_EMAIL_MAX,
+    authRateLimitPasswordResetConfirmIpMax:
+      parsed.data.AUTH_RATE_LIMIT_PASSWORD_RESET_CONFIRM_IP_MAX,
     smtpHost: parsed.data.SMTP_HOST?.trim() ? parsed.data.SMTP_HOST.trim() : null,
     smtpPort: parsed.data.SMTP_PORT ?? null,
     smtpUser: parsed.data.SMTP_USER?.trim() ? parsed.data.SMTP_USER.trim() : null,

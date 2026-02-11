@@ -218,6 +218,45 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(meAfterLogout.statusCode).toBe(401);
   });
 
+  it("writes audit events for auth actions", async () => {
+    const register = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "audit-auth@example.com",
+        password: "auditPassword123!",
+      },
+    });
+    expect(register.statusCode).toBe(201);
+    const cookie = extractCookie(register.headers["set-cookie"]);
+
+    const logout = await app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie },
+    });
+    expect(logout.statusCode).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const events = await pool.query<{
+      action: string;
+      status_code: number;
+    }>(
+      `SELECT action, status_code
+       FROM audit_events
+       ORDER BY id ASC`
+    );
+
+    expect(
+      events.rows.some((row) => row.action.startsWith("POST /api/auth/register"))
+    ).toBe(true);
+    expect(
+      events.rows.some((row) => row.action.startsWith("POST /api/auth/logout"))
+    ).toBe(true);
+    expect(events.rows.every((row) => row.status_code >= 200)).toBe(true);
+  });
+
   it("supports password reset request and confirm flow", async () => {
     const registerResponse = await app.inject({
       method: "POST",
@@ -479,6 +518,48 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     expect(importJob.json().status).toBe("queued");
   });
 
+  it("replays idempotent import creation without duplicating jobs", async () => {
+    const user = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "import-idempotent@example.com",
+        password: "passwordImporter!",
+      },
+    });
+    const cookie = extractCookie(user.headers["set-cookie"]);
+    const idempotencyKey = "import-idempotency-0001";
+
+    const makeRequest = async () => {
+      const multipart = makeMultipartBody({
+        fieldName: "file",
+        fileName: "sample.pgn",
+        contentType: "application/x-chess-pgn",
+        content:
+          "[Event \"Test\"]\n[White \"A\"]\n[Black \"B\"]\n[Result \"1-0\"]\n\n1. e4 e5 1-0\n",
+      });
+
+      return app.inject({
+        method: "POST",
+        url: "/api/imports",
+        headers: {
+          cookie,
+          "idempotency-key": idempotencyKey,
+          "content-type": `multipart/form-data; boundary=${multipart.boundary}`,
+        },
+        payload: multipart.body,
+      });
+    };
+
+    const first = await makeRequest();
+    const second = await makeRequest();
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().id).toBe(first.json().id);
+    expect(enqueuedJobs).toHaveLength(1);
+  });
+
   it("creates and cancels analysis requests", async () => {
     const user = await app.inject({
       method: "POST",
@@ -521,6 +602,48 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(cancel.statusCode).toBe(200);
     expect(cancel.json().status).toBe("cancelled");
+  });
+
+  it("replays idempotent analysis creation without duplicating jobs", async () => {
+    const user = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "analysis-idempotent@example.com",
+        password: "passwordAnalysis!",
+      },
+    });
+    const cookie = extractCookie(user.headers["set-cookie"]);
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/analysis",
+      headers: {
+        cookie,
+        "idempotency-key": "analysis-idempotency-0001",
+      },
+      payload: {
+        fen: "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5",
+        depth: 10,
+      },
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/analysis",
+      headers: {
+        cookie,
+        "idempotency-key": "analysis-idempotency-0001",
+      },
+      payload: {
+        fen: "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5",
+        depth: 10,
+      },
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().id).toBe(first.json().id);
+    expect(enqueuedAnalysis).toHaveLength(1);
   });
 
   it("supports PGN download and per-user annotations", async () => {
@@ -706,6 +829,54 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(includeFlags.rows[0].include_annotations).toBe(true);
     expect(includeFlags.rows[1].include_annotations).toBe(false);
+  });
+
+  it("replays idempotent export creation without duplicating jobs", async () => {
+    const user = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: {
+        email: "export-idempotent@example.com",
+        password: "passwordExport!",
+      },
+    });
+    const cookie = extractCookie(user.headers["set-cookie"]);
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/exports",
+      headers: {
+        cookie,
+        "idempotency-key": "export-idempotency-0001",
+      },
+      payload: {
+        mode: "query",
+        query: {
+          player: "Kasparov",
+          eco: "B44",
+        },
+      },
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/exports",
+      headers: {
+        cookie,
+        "idempotency-key": "export-idempotency-0001",
+      },
+      payload: {
+        mode: "query",
+        query: {
+          player: "Kasparov",
+          eco: "B44",
+        },
+      },
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().id).toBe(first.json().id);
+    expect(enqueuedExports).toHaveLength(1);
   });
 
   it("downloads completed export artifacts for the owning user", async () => {

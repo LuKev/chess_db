@@ -1,9 +1,10 @@
 import argon2 from "argon2";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import type { AppConfig } from "../config.js";
+import type { AuthRateLimiter } from "../infrastructure/auth_rate_limiter.js";
 import type { PasswordResetMailer } from "../infrastructure/mailer.js";
 import {
   createSession,
@@ -39,11 +40,55 @@ function hashResetToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function clientIp(request: FastifyRequest): string {
+  const forwardedFor = request.headers["x-forwarded-for"];
+  if (typeof forwardedFor === "string" && forwardedFor.trim().length > 0) {
+    return forwardedFor.split(",")[0].trim();
+  }
+  return request.ip;
+}
+
+async function enforceRateLimit(params: {
+  app: FastifyInstance;
+  reply: FastifyReply;
+  limiter: AuthRateLimiter | null;
+  scope: string;
+  key: string;
+  maxAttempts: number;
+  windowSeconds: number;
+  message: string;
+}): Promise<boolean> {
+  if (!params.limiter) {
+    return false;
+  }
+
+  try {
+    const result = await params.limiter.checkLimit({
+      scope: params.scope,
+      key: params.key,
+      maxAttempts: params.maxAttempts,
+      windowSeconds: params.windowSeconds,
+    });
+
+    if (result.allowed) {
+      return false;
+    }
+
+    params.reply.header("Retry-After", String(result.retryAfterSeconds));
+    await params.reply.status(429).send({ error: params.message });
+    return true;
+  } catch (error) {
+    params.app.log.warn({ error }, "Auth rate limiter unavailable");
+    return false;
+  }
+}
+
 export async function registerAuthRoutes(
   app: FastifyInstance,
   pool: Pool,
   config: AppConfig,
-  mailer: PasswordResetMailer
+  mailer: PasswordResetMailer,
+  authRateLimiter: AuthRateLimiter | null
 ): Promise<void> {
   app.post("/api/auth/register", async (request, reply) => {
     const parsed = CredentialsSchema.safeParse(request.body);
@@ -55,6 +100,21 @@ export async function registerAuthRoutes(
     }
 
     const email = parsed.data.email.toLowerCase();
+    const ip = clientIp(request);
+    const registerRateLimited = await enforceRateLimit({
+      app,
+      reply,
+      limiter: authRateLimiter,
+      scope: "register-ip",
+      key: ip,
+      maxAttempts: config.authRateLimitRegisterIpMax,
+      windowSeconds: config.authRateLimitWindowSeconds,
+      message: "Too many registration attempts. Please try again later.",
+    });
+    if (registerRateLimited) {
+      return;
+    }
+
     const passwordHash = await argon2.hash(parsed.data.password, {
       type: argon2.argon2id,
     });
@@ -108,6 +168,34 @@ export async function registerAuthRoutes(
     }
 
     const email = parsed.data.email.toLowerCase();
+    const ip = clientIp(request);
+    const loginIpLimited = await enforceRateLimit({
+      app,
+      reply,
+      limiter: authRateLimiter,
+      scope: "login-ip",
+      key: ip,
+      maxAttempts: config.authRateLimitLoginIpMax,
+      windowSeconds: config.authRateLimitWindowSeconds,
+      message: "Too many login attempts. Please try again later.",
+    });
+    if (loginIpLimited) {
+      return;
+    }
+    const loginEmailLimited = await enforceRateLimit({
+      app,
+      reply,
+      limiter: authRateLimiter,
+      scope: "login-email",
+      key: email,
+      maxAttempts: config.authRateLimitLoginEmailMax,
+      windowSeconds: config.authRateLimitWindowSeconds,
+      message: "Too many login attempts for this account. Please try again later.",
+    });
+    if (loginEmailLimited) {
+      return;
+    }
+
     const userResult = await pool.query<{
       id: number | string;
       email: string;
@@ -173,6 +261,34 @@ export async function registerAuthRoutes(
     }
 
     const email = parsed.data.email.toLowerCase();
+    const ip = clientIp(request);
+    const resetIpLimited = await enforceRateLimit({
+      app,
+      reply,
+      limiter: authRateLimiter,
+      scope: "password-reset-request-ip",
+      key: ip,
+      maxAttempts: config.authRateLimitPasswordResetIpMax,
+      windowSeconds: config.authRateLimitWindowSeconds,
+      message: "Too many password reset attempts. Please try again later.",
+    });
+    if (resetIpLimited) {
+      return;
+    }
+    const resetEmailLimited = await enforceRateLimit({
+      app,
+      reply,
+      limiter: authRateLimiter,
+      scope: "password-reset-request-email",
+      key: email,
+      maxAttempts: config.authRateLimitPasswordResetEmailMax,
+      windowSeconds: config.authRateLimitWindowSeconds,
+      message: "Too many password reset attempts for this account. Please try again later.",
+    });
+    if (resetEmailLimited) {
+      return;
+    }
+
     const userResult = await pool.query<{ id: number | string }>(
       "SELECT id FROM users WHERE email = $1",
       [email]
@@ -222,6 +338,21 @@ export async function registerAuthRoutes(
         error: "Invalid request body",
         details: parsed.error.flatten(),
       });
+    }
+
+    const ip = clientIp(request);
+    const confirmLimited = await enforceRateLimit({
+      app,
+      reply,
+      limiter: authRateLimiter,
+      scope: "password-reset-confirm-ip",
+      key: ip,
+      maxAttempts: config.authRateLimitPasswordResetConfirmIpMax,
+      windowSeconds: config.authRateLimitWindowSeconds,
+      message: "Too many password reset confirmations. Please try again later.",
+    });
+    if (confirmLimited) {
+      return;
     }
 
     const tokenHash = hashResetToken(parsed.data.token);

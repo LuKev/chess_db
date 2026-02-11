@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { requireUser } from "../auth.js";
+import { parseIdempotencyKey } from "../http/idempotency.js";
 import type { ExportQueue } from "../infrastructure/queue.js";
 import type { ObjectStorage } from "../infrastructure/storage.js";
 
@@ -42,26 +43,76 @@ export async function registerExportRoutes(
     }
 
     const payload = parsed.data;
-    const createResult = await pool.query<{ id: number | string }>(
-      `INSERT INTO export_jobs (
-        user_id,
-        status,
-        mode,
-        game_ids,
-        filter_query,
-        include_annotations
-      ) VALUES ($1, 'queued', $2, $3, $4::jsonb, $5)
-      RETURNING id`,
-      [
-        request.user!.id,
-        payload.mode,
-        payload.mode === "ids" ? payload.gameIds : null,
-        payload.mode === "query" ? JSON.stringify(payload.query) : null,
-        payload.includeAnnotations,
-      ]
-    );
+    const parsedIdempotency = parseIdempotencyKey(request.headers["idempotency-key"]);
+    if (parsedIdempotency.error) {
+      return reply.status(400).send({ error: parsedIdempotency.error });
+    }
+    const idempotencyKey = parsedIdempotency.key;
+    if (idempotencyKey) {
+      const existing = await pool.query<{ id: number | string; status: string }>(
+        `SELECT id, status
+         FROM export_jobs
+         WHERE user_id = $1
+           AND idempotency_key = $2
+         ORDER BY id DESC
+         LIMIT 1`,
+        [request.user!.id, idempotencyKey]
+      );
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        return reply.status(200).send({
+          id: toId(row.id),
+          status: row.status,
+          idempotentReplay: true,
+        });
+      }
+    }
 
-    const exportJobId = toId(createResult.rows[0].id);
+    let exportJobId: number;
+    try {
+      const createResult = await pool.query<{ id: number | string }>(
+        `INSERT INTO export_jobs (
+          user_id,
+          status,
+          mode,
+          game_ids,
+          filter_query,
+          include_annotations,
+          idempotency_key
+        ) VALUES ($1, 'queued', $2, $3, $4::jsonb, $5, $6)
+        RETURNING id`,
+        [
+          request.user!.id,
+          payload.mode,
+          payload.mode === "ids" ? payload.gameIds : null,
+          payload.mode === "query" ? JSON.stringify(payload.query) : null,
+          payload.includeAnnotations,
+          idempotencyKey,
+        ]
+      );
+      exportJobId = toId(createResult.rows[0].id);
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505" && idempotencyKey) {
+        const existing = await pool.query<{ id: number | string; status: string }>(
+          `SELECT id, status
+           FROM export_jobs
+           WHERE user_id = $1
+             AND idempotency_key = $2
+           ORDER BY id DESC
+           LIMIT 1`,
+          [request.user!.id, idempotencyKey]
+        );
+        if (existing.rowCount) {
+          const row = existing.rows[0];
+          return reply.status(200).send({
+            id: toId(row.id),
+            status: row.status,
+            idempotentReplay: true,
+          });
+        }
+      }
+      throw error;
+    }
 
     try {
       await queue.enqueueExport({

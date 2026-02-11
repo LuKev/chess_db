@@ -60,6 +60,10 @@ Notes:
    - API: `API_SENTRY_DSN`, `API_SENTRY_ENV`
    - Worker: `WORKER_SENTRY_DSN`, `WORKER_SENTRY_ENV`
 6. Local Prometheus/Grafana stack and alert rules are in `ops/observability/`.
+7. Security hardening toggles:
+   - `ENFORCE_CSRF_ORIGIN_CHECK=true` enforces origin checks for mutating cookie-auth requests.
+   - Auth endpoint brute-force limits are configurable via `AUTH_RATE_LIMIT_*` env vars.
+   - `POST /api/imports`, `POST /api/analysis`, and `POST /api/exports` support optional `Idempotency-Key` header.
 
 ## Implemented Endpoints (Current)
 

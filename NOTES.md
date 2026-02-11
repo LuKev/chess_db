@@ -91,3 +91,12 @@
    - Set fresh GCS HMAC S3 credentials into Railway `api` and `worker` (`S3_ENDPOINT=https://storage.googleapis.com`, `S3_REGION=auto`, path style true).
    - Redeploys for both services succeeded and smoke test passed against `https://api-production-d291.up.railway.app`.
    - `https://api.kezilu.com` did not resolve from local DNS at time of verification (`ENOTFOUND`), so custom-domain DNS/propagation should be validated separately.
+30. Security/reliability hardening tranche completed (2026-02-11):
+   - Added migration `0006_security_hardening.sql`:
+     - New `audit_events` table + indexes.
+     - Idempotency columns and unique partial indexes for `import_jobs`, `engine_requests`, and `export_jobs`.
+   - API now logs audit events for auth/import/export/analysis/backfill routes on response.
+   - Added production CSRF origin enforcement for mutating cookie-auth requests (`ENFORCE_CSRF_ORIGIN_CHECK`).
+   - Added Redis-backed auth endpoint brute-force rate limiting knobs (`AUTH_RATE_LIMIT_*`), disabled automatically in `NODE_ENV=test`.
+   - Added `Idempotency-Key` support for `POST /api/imports`, `POST /api/analysis`, and `POST /api/exports` with replay-safe 200 responses.
+   - Added integration tests for idempotency replay and auth audit logging.

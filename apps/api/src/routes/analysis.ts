@@ -4,6 +4,7 @@ import type { Pool } from "pg";
 import { requireUser } from "../auth.js";
 import type { AnalysisQueue } from "../infrastructure/queue.js";
 import { normalizeFen } from "../chess/fen.js";
+import { parseIdempotencyKey } from "../http/idempotency.js";
 
 const CreateAnalysisSchema = z.object({
   fen: z.string().trim().min(1).max(2048),
@@ -51,6 +52,31 @@ export async function registerAnalysisRoutes(
     }
 
     const payload = parsed.data;
+    const parsedIdempotency = parseIdempotencyKey(request.headers["idempotency-key"]);
+    if (parsedIdempotency.error) {
+      return reply.status(400).send({ error: parsedIdempotency.error });
+    }
+    const idempotencyKey = parsedIdempotency.key;
+    if (idempotencyKey) {
+      const existing = await pool.query<{ id: number | string; status: string }>(
+        `SELECT id, status
+         FROM engine_requests
+         WHERE user_id = $1
+           AND idempotency_key = $2
+         ORDER BY id DESC
+         LIMIT 1`,
+        [request.user!.id, idempotencyKey]
+      );
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        return reply.status(200).send({
+          id: toId(row.id),
+          status: row.status,
+          idempotentReplay: true,
+        });
+      }
+    }
+
     let fenNorm: string;
     try {
       fenNorm = normalizeFen(payload.fen).fenNorm;
@@ -100,6 +126,70 @@ export async function registerAnalysisRoutes(
 
     if (cachedLine.rowCount) {
       const cached = cachedLine.rows[0];
+      let analysisRequestId: number;
+      try {
+        const createResult = await pool.query<{ id: number | string }>(
+          `INSERT INTO engine_requests (
+            user_id,
+            status,
+            fen,
+            depth,
+            nodes,
+            time_ms,
+            best_move,
+            principal_variation,
+            eval_cp,
+            eval_mate,
+            idempotency_key
+          ) VALUES (
+            $1, 'completed', $2, $3, $4, $5, $6, $7, $8, $9, $10
+          )
+          RETURNING id`,
+          [
+            request.user!.id,
+            payload.fen,
+            cached.depth ?? payload.depth,
+            cached.nodes ?? payload.nodes ?? null,
+            cached.time_ms ?? payload.timeMs ?? null,
+            cached.best_move,
+            (cached.pv_uci ?? []).join(" "),
+            cached.eval_cp,
+            cached.eval_mate,
+            idempotencyKey,
+          ]
+        );
+        analysisRequestId = toId(createResult.rows[0].id);
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505" && idempotencyKey) {
+          const existing = await pool.query<{ id: number | string; status: string }>(
+            `SELECT id, status
+             FROM engine_requests
+             WHERE user_id = $1
+               AND idempotency_key = $2
+             ORDER BY id DESC
+             LIMIT 1`,
+            [request.user!.id, idempotencyKey]
+          );
+          if (existing.rowCount) {
+            const row = existing.rows[0];
+            return reply.status(200).send({
+              id: toId(row.id),
+              status: row.status,
+              idempotentReplay: true,
+            });
+          }
+        }
+        throw error;
+      }
+      return reply.status(201).send({
+        id: analysisRequestId,
+        status: "completed",
+        cached: true,
+      });
+    }
+
+    let analysisRequestId: number;
+    try {
       const createResult = await pool.query<{ id: number | string }>(
         `INSERT INTO engine_requests (
           user_id,
@@ -108,42 +198,42 @@ export async function registerAnalysisRoutes(
           depth,
           nodes,
           time_ms,
-          best_move,
-          principal_variation,
-          eval_cp,
-          eval_mate
-        ) VALUES (
-          $1, 'completed', $2, $3, $4, $5, $6, $7, $8, $9
+          idempotency_key
         )
-        RETURNING id`,
+         VALUES ($1, 'queued', $2, $3, $4, $5, $6)
+         RETURNING id`,
         [
           request.user!.id,
           payload.fen,
-          cached.depth ?? payload.depth,
-          cached.nodes ?? payload.nodes ?? null,
-          cached.time_ms ?? payload.timeMs ?? null,
-          cached.best_move,
-          (cached.pv_uci ?? []).join(" "),
-          cached.eval_cp,
-          cached.eval_mate,
+          payload.depth,
+          payload.nodes ?? null,
+          payload.timeMs ?? null,
+          idempotencyKey,
         ]
       );
-      const analysisRequestId = toId(createResult.rows[0].id);
-      return reply.status(201).send({
-        id: analysisRequestId,
-        status: "completed",
-        cached: true,
-      });
+      analysisRequestId = toId(createResult.rows[0].id);
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505" && idempotencyKey) {
+        const existing = await pool.query<{ id: number | string; status: string }>(
+          `SELECT id, status
+           FROM engine_requests
+           WHERE user_id = $1
+             AND idempotency_key = $2
+           ORDER BY id DESC
+           LIMIT 1`,
+          [request.user!.id, idempotencyKey]
+        );
+        if (existing.rowCount) {
+          const row = existing.rows[0];
+          return reply.status(200).send({
+            id: toId(row.id),
+            status: row.status,
+            idempotentReplay: true,
+          });
+        }
+      }
+      throw error;
     }
-
-    const createResult = await pool.query<{ id: number | string }>(
-      `INSERT INTO engine_requests (user_id, status, fen, depth, nodes, time_ms)
-       VALUES ($1, 'queued', $2, $3, $4, $5)
-       RETURNING id`,
-      [request.user!.id, payload.fen, payload.depth, payload.nodes ?? null, payload.timeMs ?? null]
-    );
-
-    const analysisRequestId = toId(createResult.rows[0].id);
 
     try {
       await queue.enqueueAnalysis({

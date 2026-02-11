@@ -4,9 +4,14 @@ import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { attachUserFromSession } from "./auth.js";
+import { recordAuditEvent } from "./audit.js";
 import type { AppConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db.js";
+import {
+  createAuthRateLimiter,
+  type AuthRateLimiter,
+} from "./infrastructure/auth_rate_limiter.js";
 import {
   createAnalysisQueue,
   createExportQueue,
@@ -50,6 +55,15 @@ export type BuildAppOptions = {
   objectStorage?: ObjectStorage;
   runMigrationsOnBoot?: boolean;
 };
+
+const MutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const AuditedPathPrefixes = [
+  "/api/auth",
+  "/api/imports",
+  "/api/exports",
+  "/api/analysis",
+  "/api/backfill",
+];
 
 function siteFromHost(hostname: string): string {
   const host = hostname.toLowerCase();
@@ -95,6 +109,40 @@ function validateProductionTopology(config: AppConfig): void {
   }
 }
 
+function requestPath(requestUrl: string | undefined): string {
+  if (!requestUrl) {
+    return "/";
+  }
+  const [path] = requestUrl.split("?");
+  return path || "/";
+}
+
+function getOriginFromRequestHeaders(headers: Record<string, unknown>): string | null {
+  const origin = headers.origin;
+  if (typeof origin === "string" && origin.trim().length > 0) {
+    try {
+      return new URL(origin).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  const referer = headers.referer;
+  if (typeof referer === "string" && referer.trim().length > 0) {
+    try {
+      return new URL(referer).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function shouldAuditPath(path: string): boolean {
+  return AuditedPathPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 export async function buildApp(
   options: BuildAppOptions = {}
 ): Promise<FastifyInstance> {
@@ -110,6 +158,10 @@ export async function buildApp(
   const openingBackfillQueue =
     options.openingBackfillQueue ?? createOpeningBackfillQueue(config);
   const objectStorage = options.objectStorage ?? createObjectStorage(config);
+  const authRateLimiter: AuthRateLimiter | null =
+    config.authRateLimitEnabled && config.nodeEnv !== "test"
+    ? createAuthRateLimiter(config.redisUrl)
+    : null;
   const passwordResetMailer = createPasswordResetMailer(config);
   const ownsImportQueue = !options.importQueue;
   const ownsAnalysisQueue = !options.analysisQueue;
@@ -117,6 +169,7 @@ export async function buildApp(
   const ownsPositionBackfillQueue = !options.positionBackfillQueue;
   const ownsOpeningBackfillQueue = !options.openingBackfillQueue;
   const ownsObjectStorage = !options.objectStorage;
+  const ownsAuthRateLimiter = Boolean(authRateLimiter);
 
   if (options.runMigrationsOnBoot ?? config.autoMigrate) {
     await runMigrations(pool);
@@ -151,6 +204,59 @@ export async function buildApp(
     await attachUserFromSession(request, pool, config);
   });
 
+  app.addHook("onRequest", async (request, reply) => {
+    if (!config.enforceCsrfOriginCheck || config.nodeEnv === "test") {
+      return;
+    }
+    if (!MutatingMethods.has(request.method)) {
+      return;
+    }
+
+    const hasSessionCookie = Boolean(request.cookies[config.sessionCookieName]);
+    if (!hasSessionCookie) {
+      return;
+    }
+
+    const requestOrigin = getOriginFromRequestHeaders(
+      request.headers as Record<string, unknown>
+    );
+    if (!requestOrigin) {
+      return reply.status(403).send({ error: "CSRF protection: missing request origin" });
+    }
+    if (requestOrigin !== config.corsOrigin) {
+      return reply.status(403).send({ error: "CSRF protection: invalid request origin" });
+    }
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    const path = requestPath(request.raw.url);
+    if (!shouldAuditPath(path) || request.method === "OPTIONS") {
+      return;
+    }
+
+    try {
+      await recordAuditEvent(pool, {
+        userId: request.user?.id ?? null,
+        action: `${request.method} ${path}`,
+        method: request.method,
+        path,
+        statusCode: reply.statusCode,
+        ipAddress: request.ip ?? null,
+        userAgent:
+          typeof request.headers["user-agent"] === "string"
+            ? request.headers["user-agent"]
+            : null,
+        requestId: request.id,
+        metadata: {
+          hasSessionCookie: Boolean(request.cookies[config.sessionCookieName]),
+          query: request.query ?? {},
+        },
+      });
+    } catch (error) {
+      request.log.warn({ error }, "Failed to record audit event");
+    }
+  });
+
   app.get("/health", async () => {
     return {
       ok: true,
@@ -171,7 +277,7 @@ export async function buildApp(
     registerApiMetrics(app, apiMetrics, config.apiMetricsPath);
   }
 
-  await registerAuthRoutes(app, pool, config, passwordResetMailer);
+  await registerAuthRoutes(app, pool, config, passwordResetMailer, authRateLimiter);
   await registerGameRoutes(app, pool);
   await registerFilterRoutes(app, pool);
   await registerImportRoutes(app, pool, config, importQueue, objectStorage);
@@ -223,6 +329,9 @@ export async function buildApp(
     }
     if (ownsObjectStorage) {
       await objectStorage.close();
+    }
+    if (ownsAuthRateLimiter && authRateLimiter) {
+      await authRateLimiter.close();
     }
     if (ownsPool) {
       await pool.end();
