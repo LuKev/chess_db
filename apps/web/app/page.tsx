@@ -79,8 +79,16 @@ type SavedFilter = {
   id: number;
   name: string;
   query: Record<string, unknown>;
+  shareToken: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type FilterPreset = {
+  id: string;
+  name: string;
+  description: string;
+  query: Record<string, unknown>;
 };
 
 type AnalysisResponse = {
@@ -511,8 +519,12 @@ export default function Home() {
   const [imports, setImports] = useState<ImportJob[]>([]);
 
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
+  const [filterPresets, setFilterPresets] = useState<FilterPreset[]>([]);
   const [filterName, setFilterName] = useState("");
   const [filterMessage, setFilterMessage] = useState("Sign in to manage saved filters");
+  const [pendingSharedFilterToken, setPendingSharedFilterToken] = useState<string | null>(
+    null
+  );
   const [tags, setTags] = useState<TagItem[]>([]);
   const [newTagName, setNewTagName] = useState("");
   const [newTagColor, setNewTagColor] = useState("#4f8f6b");
@@ -837,6 +849,17 @@ export default function Home() {
         ? `${response.data.items.length} saved filter(s)`
         : "No saved filters"
     );
+  }
+
+  async function refreshFilterPresets(): Promise<void> {
+    const response = await fetchJson<{ items: FilterPreset[] }>("/api/filters/presets", {
+      method: "GET",
+    });
+    if (response.status !== 200 || !("items" in response.data)) {
+      setFilterPresets([]);
+      return;
+    }
+    setFilterPresets(response.data.items);
   }
 
   async function refreshExports(): Promise<void> {
@@ -1242,6 +1265,42 @@ export default function Home() {
     await refreshSavedFilters();
   }
 
+  async function copySharedFilterLink(savedFilter: SavedFilter): Promise<void> {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("sharedFilter", savedFilter.shareToken);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+      setFilterMessage(`Copied share link for "${savedFilter.name}"`);
+    } catch {
+      setFilterMessage("Failed to copy share link");
+    }
+  }
+
+  async function applySharedFilter(token: string): Promise<void> {
+    if (!user) {
+      return;
+    }
+    const response = await fetchJson<SavedFilter>(`/api/filters/shared/${token}`, {
+      method: "GET",
+    });
+    if (response.status !== 200 || !("query" in response.data)) {
+      setFilterMessage(
+        `Failed to load shared filter${"error" in response.data && response.data.error ? `: ${response.data.error}` : ""}`
+      );
+      return;
+    }
+    applySavedFilter(response.data);
+    setFilterMessage(`Applied shared filter "${response.data.name}"`);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("sharedFilter");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
+
   async function refreshAnalysis(analysisId: number): Promise<void> {
     const response = await fetchJson<AnalysisResponse>(`/api/analysis/${analysisId}`, {
       method: "GET",
@@ -1534,8 +1593,8 @@ export default function Home() {
     applyNotationLine(selectedGame.startingFen, line, 0);
   }
 
-  function applySavedFilter(savedFilter: SavedFilter): void {
-    const query = savedFilter.query;
+  function applySavedFilter(filter: { query: Record<string, unknown> }): void {
+    const query = filter.query;
 
     setPlayer(String(query.player ?? ""));
     setEco(String(query.eco ?? ""));
@@ -1568,6 +1627,14 @@ export default function Home() {
 
   useEffect(() => {
     void refreshSession();
+    void refreshFilterPresets();
+    if (typeof window !== "undefined") {
+      const token = new URLSearchParams(window.location.search).get("sharedFilter");
+      if (token && token.trim().length > 0) {
+        setPendingSharedFilterToken(token.trim());
+        setFilterMessage("Sign in to apply shared filter link");
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -1585,6 +1652,14 @@ export default function Home() {
     ]);
     setPage(1);
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !pendingSharedFilterToken) {
+      return;
+    }
+    void applySharedFilter(pendingSharedFilterToken);
+    setPendingSharedFilterToken(null);
+  }, [user, pendingSharedFilterToken]);
 
   useEffect(() => {
     void refreshGames(page);
@@ -2530,6 +2605,23 @@ export default function Home() {
         <p className="muted">{filterMessage}</p>
 
         <div className="saved-filters">
+          {filterPresets.map((preset) => (
+            <div key={preset.id} className="saved-filter-item">
+              <div>
+                <strong>{preset.name}</strong>
+                <p className="muted">{preset.description}</p>
+              </div>
+              <div className="button-row">
+                <button onClick={() => applySavedFilter(preset)} disabled={!user}>
+                  Apply Preset
+                </button>
+              </div>
+            </div>
+          ))}
+          {filterPresets.length === 0 ? <p className="muted">No presets available</p> : null}
+        </div>
+
+        <div className="saved-filters">
           {savedFilters.map((savedFilter) => (
             <div key={savedFilter.id} className="saved-filter-item">
               <div>
@@ -2537,6 +2629,9 @@ export default function Home() {
               </div>
               <div className="button-row">
                 <button onClick={() => applySavedFilter(savedFilter)} disabled={!user}>Apply</button>
+                <button onClick={() => void copySharedFilterLink(savedFilter)} disabled={!user}>
+                  Share
+                </button>
                 <button onClick={() => void deleteFilter(savedFilter.id)} disabled={!user}>Delete</button>
               </div>
             </div>

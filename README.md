@@ -87,6 +87,8 @@ Notes:
 3. Filters:
    - `POST /api/filters`
    - `GET /api/filters`
+   - `GET /api/filters/presets`
+   - `GET /api/filters/shared/:token`
    - `DELETE /api/filters/:id`
 4. Imports:
    - `POST /api/imports` (multipart `.pgn` / `.pgn.zst`)

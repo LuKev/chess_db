@@ -108,3 +108,12 @@
    - Worker now writes final (post-retry) failed jobs into `queue_dead_letters` for import/analysis/export/backfill queues.
    - Added tenant-scoped dead-letter inspection API: `GET /api/ops/dead-letters`.
    - Added integration test coverage for dead-letter listing and user isolation.
+32. Saved filter productization tranche completed (2026-02-11):
+   - Added migration `0008_saved_filter_sharing.sql` to store per-filter `share_token` with unique index.
+   - Added server-driven presets endpoint: `GET /api/filters/presets`.
+   - Added shared-filter retrieval endpoint (tenant scoped): `GET /api/filters/shared/:token`.
+   - Saved filter create/list responses now include `shareToken`.
+   - Web UI now supports:
+     - Applying built-in presets.
+     - Copying share links for saved filters (`?sharedFilter=<token>`).
+     - Auto-applying shared filter links after sign-in.

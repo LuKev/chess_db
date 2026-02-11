@@ -429,6 +429,9 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(create.statusCode).toBe(201);
     const filterId = create.json().id as number;
+    const shareToken = create.json().shareToken as string;
+    expect(typeof shareToken).toBe("string");
+    expect(shareToken.length).toBeGreaterThanOrEqual(8);
 
     const listA = await app.inject({
       method: "GET",
@@ -440,6 +443,7 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(listA.statusCode).toBe(200);
     expect(listA.json().items).toHaveLength(1);
+    expect(typeof listA.json().items[0].shareToken).toBe("string");
 
     const listB = await app.inject({
       method: "GET",
@@ -451,6 +455,25 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
 
     expect(listB.statusCode).toBe(200);
     expect(listB.json().items).toHaveLength(0);
+
+    const sharedByOwner = await app.inject({
+      method: "GET",
+      url: `/api/filters/shared/${shareToken}`,
+      headers: {
+        cookie: cookieA,
+      },
+    });
+    expect(sharedByOwner.statusCode).toBe(200);
+    expect(sharedByOwner.json().name).toBe("Rapid White Games");
+
+    const sharedByNonOwner = await app.inject({
+      method: "GET",
+      url: `/api/filters/shared/${shareToken}`,
+      headers: {
+        cookie: cookieB,
+      },
+    });
+    expect(sharedByNonOwner.statusCode).toBe(404);
 
     const deleteFromWrongUser = await app.inject({
       method: "DELETE",
@@ -471,6 +494,13 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
 
     expect(deleteFromOwner.statusCode).toBe(204);
+
+    const presets = await app.inject({
+      method: "GET",
+      url: "/api/filters/presets",
+    });
+    expect(presets.statusCode).toBe(200);
+    expect(presets.json().items.length).toBeGreaterThan(0);
   });
 
   it("creates import jobs and enqueues processing", async () => {
