@@ -4,6 +4,8 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().min(1).default("0.0.0.0"),
+  // Comma-separated list of allowed web origins (e.g. "https://kezilu.com,https://www.kezilu.com").
+  // We still accept a single origin string for backwards compatibility.
   CORS_ORIGIN: z.string().min(1),
   DATABASE_URL: z.string().min(1),
   SESSION_SECRET: z.string().min(16),
@@ -78,7 +80,7 @@ export type AppConfig = {
   nodeEnv: "development" | "test" | "production";
   port: number;
   host: string;
-  corsOrigin: string;
+  corsOrigins: string[];
   databaseUrl: string;
   sessionSecret: string;
   sessionCookieName: string;
@@ -130,11 +132,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error(`Invalid environment configuration: ${message}`);
   }
 
+  const rawCorsOrigins = parsed.data.CORS_ORIGIN.split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  // Pragmatic safety: if one of the allowed origins is kezilu.com, also allow its www variant.
+  const expandedCorsOrigins = new Set<string>();
+  for (const origin of rawCorsOrigins) {
+    expandedCorsOrigins.add(origin);
+    try {
+      const url = new URL(origin);
+      if (url.hostname === "kezilu.com") {
+        url.hostname = "www.kezilu.com";
+        expandedCorsOrigins.add(url.origin);
+      } else if (url.hostname === "www.kezilu.com") {
+        url.hostname = "kezilu.com";
+        expandedCorsOrigins.add(url.origin);
+      }
+    } catch {
+      // Keep the raw value; validation happens elsewhere.
+    }
+  }
+
   return {
     nodeEnv: parsed.data.NODE_ENV,
     port: parsed.data.PORT,
     host: parsed.data.HOST,
-    corsOrigin: parsed.data.CORS_ORIGIN,
+    corsOrigins: Array.from(expandedCorsOrigins),
     databaseUrl: parsed.data.DATABASE_URL,
     sessionSecret: parsed.data.SESSION_SECRET,
     sessionCookieName: parsed.data.SESSION_COOKIE_NAME,

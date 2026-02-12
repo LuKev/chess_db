@@ -91,14 +91,14 @@ function validateProductionTopology(config: AppConfig): void {
 
   const apiOrigin = new URL(config.publicApiOrigin);
   const webOrigin = new URL(config.publicWebOrigin);
-  const corsOrigin = new URL(config.corsOrigin);
+  const corsOrigins = config.corsOrigins.map((origin) => new URL(origin));
 
   if (apiOrigin.protocol !== "https:" || webOrigin.protocol !== "https:") {
     throw new Error("PUBLIC_API_ORIGIN and PUBLIC_WEB_ORIGIN must use https in production.");
   }
 
-  if (corsOrigin.origin !== webOrigin.origin) {
-    throw new Error("CORS_ORIGIN must exactly match PUBLIC_WEB_ORIGIN in production.");
+  if (!corsOrigins.some((origin) => origin.origin === webOrigin.origin)) {
+    throw new Error("CORS_ORIGIN must include PUBLIC_WEB_ORIGIN in production.");
   }
 
   const apiSite = siteFromHost(apiOrigin.hostname);
@@ -107,6 +107,15 @@ function validateProductionTopology(config: AppConfig): void {
     throw new Error(
       `Cookie topology mismatch: API site (${apiSite}) and web site (${webSite}) differ.`
     );
+  }
+
+  for (const origin of corsOrigins) {
+    const originSite = siteFromHost(origin.hostname);
+    if (originSite !== apiSite) {
+      throw new Error(
+        `CORS origin site mismatch: allowed origin (${origin.origin}) has site (${originSite}) but API site is (${apiSite}).`
+      );
+    }
   }
 }
 
@@ -191,7 +200,18 @@ export async function buildApp(
 
   await app.register(cookie, { secret: config.sessionSecret });
   await app.register(cors, {
-    origin: config.corsOrigin,
+    origin: (origin, cb) => {
+      if (!origin) {
+        cb(null, false);
+        return;
+      }
+      try {
+        const normalized = new URL(origin).origin;
+        cb(null, config.corsOrigins.includes(normalized));
+      } catch {
+        cb(null, false);
+      }
+    },
     credentials: true,
   });
   await app.register(multipart, {
@@ -224,7 +244,7 @@ export async function buildApp(
     if (!requestOrigin) {
       return reply.status(403).send({ error: "CSRF protection: missing request origin" });
     }
-    if (requestOrigin !== config.corsOrigin) {
+    if (!config.corsOrigins.includes(requestOrigin)) {
       return reply.status(403).send({ error: "CSRF protection: invalid request origin" });
     }
   });

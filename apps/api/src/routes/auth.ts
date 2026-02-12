@@ -247,7 +247,11 @@ export async function registerAuthRoutes(
       await invalidateSession(pool, config, token);
     }
 
-    reply.clearCookie(config.sessionCookieName, { path: "/" });
+    reply.clearCookie(config.sessionCookieName, {
+      path: "/",
+      sameSite: "lax",
+      secure: config.nodeEnv === "production",
+    });
     return { ok: true };
   });
 
