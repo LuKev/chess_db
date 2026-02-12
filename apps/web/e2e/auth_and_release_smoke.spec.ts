@@ -50,6 +50,8 @@ test.describe("release-like browser coverage", () => {
     await page.getByTestId("auth-logout").click();
     await expect(page.getByTestId("auth-status")).toContainText("Not signed in");
 
+    await page.getByTestId("auth-email").fill(email);
+    await page.getByTestId("auth-password").fill(password);
     await page.getByTestId("auth-login").click();
     await expect(page.getByTestId("auth-status")).toContainText(email);
   });

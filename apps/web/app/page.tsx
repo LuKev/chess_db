@@ -647,8 +647,8 @@ function buildFenFromEditor(state: FenEditorState): string {
 }
 
 export default function Home() {
-  const [email, setEmail] = useState("player@example.com");
-  const [password, setPassword] = useState("password123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [authMessage, setAuthMessage] = useState("Checking session...");
   const [passwordResetEmail, setPasswordResetEmail] = useState("");
@@ -2859,6 +2859,7 @@ export default function Home() {
               type="email"
               value={email}
               data-testid="auth-email"
+              placeholder="you@example.com"
               onChange={(event) => setEmail(event.target.value)}
               required
             />
@@ -2869,6 +2870,7 @@ export default function Home() {
               type="password"
               value={password}
               data-testid="auth-password"
+              placeholder="Enter password"
               onChange={(event) => setPassword(event.target.value)}
               required
               minLength={8}
