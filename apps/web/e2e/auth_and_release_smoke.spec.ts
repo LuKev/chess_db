@@ -15,6 +15,14 @@ function apiOriginFromBase(baseURL: string): string {
   return `${url.protocol}//${url.hostname.replace(/^www\./, "api.")}${url.port ? `:${url.port}` : ""}`;
 }
 
+function appEntryPath(baseURL: string | undefined): string {
+  if (!baseURL) {
+    return "/";
+  }
+  const url = new URL(baseURL);
+  return url.pathname && url.pathname !== "/" ? url.pathname : "/";
+}
+
 async function registerViaUi(params: {
   page: Page;
   email: string;
@@ -29,11 +37,11 @@ async function registerViaUi(params: {
 }
 
 test.describe("release-like browser coverage", () => {
-  test("register, persist session across reload, logout, and login", async ({ page }) => {
+  test("register, persist session across reload, logout, and login", async ({ page, baseURL }) => {
     const email = randomEmail("e2e-auth");
     const password = "E2ePassword123!";
 
-    await page.goto("/");
+    await page.goto(appEntryPath(baseURL));
     await registerViaUi({ page, email, password });
 
     await page.reload();
@@ -46,11 +54,11 @@ test.describe("release-like browser coverage", () => {
     await expect(page.getByTestId("auth-status")).toContainText(email);
   });
 
-  test("sample game seed and viewer open flow works", async ({ page }) => {
+  test("sample game seed and viewer open flow works", async ({ page, baseURL }) => {
     const email = randomEmail("e2e-seed");
     const password = "E2ePassword123!";
 
-    await page.goto("/");
+    await page.goto(appEntryPath(baseURL));
     await registerViaUi({ page, email, password });
 
     await page.getByTestId("seed-insert-sample-game").click();
@@ -73,7 +81,7 @@ test.describe("release-like browser coverage", () => {
     const resolvedBaseUrl = baseURL ?? "http://127.0.0.1:3000";
     const apiOrigin = process.env.E2E_API_ORIGIN ?? apiOriginFromBase(resolvedBaseUrl);
 
-    await page.goto("/");
+    await page.goto(appEntryPath(baseURL));
     await registerViaUi({ page, email, password });
 
     const cookies = await context.cookies(apiOrigin);

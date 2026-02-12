@@ -328,8 +328,14 @@ async function fetchJson<T>(
   options: { jsonBody?: boolean } = { jsonBody: true }
 ): Promise<{ status: number; data: T | { error?: string } }> {
   const headers = new Headers(init.headers);
+  const hasBody = init.body !== undefined && init.body !== null;
 
-  if (options.jsonBody && !(init.body instanceof FormData) && !headers.has("content-type")) {
+  if (
+    options.jsonBody &&
+    hasBody &&
+    !(init.body instanceof FormData) &&
+    !headers.has("content-type")
+  ) {
     headers.set("content-type", "application/json");
   }
 
