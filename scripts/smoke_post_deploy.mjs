@@ -6,6 +6,15 @@ if (!baseUrl) {
 }
 const requiredApiOrigin = process.env.RELEASE_REQUIRED_API_ORIGIN?.trim();
 const baseOrigin = new URL(baseUrl).origin;
+const webOrigin =
+  process.env.SMOKE_WEB_ORIGIN?.trim() ||
+  (() => {
+    const parsed = new URL(baseOrigin);
+    if (parsed.hostname.startsWith("api.")) {
+      return `${parsed.protocol}//${parsed.hostname.slice(4)}${parsed.port ? `:${parsed.port}` : ""}`;
+    }
+    return baseOrigin;
+  })();
 if (requiredApiOrigin && baseOrigin !== requiredApiOrigin) {
   throw new Error(
     `Release blocked: SMOKE_API_BASE_URL origin (${baseOrigin}) must match RELEASE_REQUIRED_API_ORIGIN (${requiredApiOrigin})`
@@ -100,7 +109,7 @@ async function main() {
     method: "POST",
     headers: {
       cookie: sessionCookie,
-      origin: baseOrigin,
+      origin: webOrigin,
     },
     body: form,
   });
@@ -125,7 +134,7 @@ async function main() {
     method: "POST",
     headers: {
       cookie: sessionCookie,
-      origin: baseOrigin,
+      origin: webOrigin,
     },
     body: JSON.stringify({
       fen: "rn1qkbnr/pppb1ppp/3p4/4p3/3PP3/2N2N2/PPP2PPP/R1BQKB1R w KQkq - 0 5",
@@ -145,7 +154,7 @@ async function main() {
     method: "POST",
     headers: {
       cookie: sessionCookie,
-      origin: baseOrigin,
+      origin: webOrigin,
     },
   });
   if (logout.response.status !== 200) {
@@ -167,6 +176,7 @@ async function main() {
         ok: true,
         baseUrl,
         requiredApiOrigin: requiredApiOrigin ?? null,
+        webOrigin,
         registerStatus: register.response.status,
         loginStatus: login.response.status,
         importStatus: importStatus.status,

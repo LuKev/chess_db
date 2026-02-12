@@ -26,7 +26,7 @@
 16. Observability baseline exists: API/worker Prometheus metrics, optional Sentry hooks, and local Grafana/Prometheus configs in `ops/observability/`.
 17. Query planner regression tests exist for key indexed paths (`apps/api/test/query_planner.integration.test.ts`).
 18. API and worker are wired to GCS S3-compatible storage; bucket provisioning helper exists in `scripts/setup_gcs_s3_railway.sh`.
-19. `api.kezilu.com` still does not resolve from this environment (latest verification: `curl` returns host resolution failure), while Railway API domain is healthy.
+19. `api.kezilu.com` resolves and serves health successfully; current DNS points to `52so47f4.up.railway.app` and smoke checks pass against the custom domain.
 20. Release policy is now blocked on custom-domain health (`api.kezilu.com`) only; browser E2E + smoke gates are wired in CI workflow.
 21. Web app supports keyboard-first viewer navigation, recently-viewed list, password reset UI, annotation undo/redo + autosave status, FEN board editor, opening breadcrumb/depth explorer, and tag/collection edit/delete UX.
 22. API game listing supports optional position node filtering via `GET /api/games?positionFen=...` (normalized FEN match against `game_positions`).
@@ -40,3 +40,6 @@
    - CNAME `api.kezilu.com` -> `52so47f4.up.railway.app`.
    - Railway custom-domain status shows `certificateStatus=VALID` and DNS `PROPAGATED` (2026-02-11).
 26. Cloudflare `wrangler` auth is available, but current token context cannot update DNS records via v4 API (returns Cloudflare authentication error); DNS update requires a Zone DNS Edit-capable API token or manual dashboard change.
+27. Top-level npm scripts include `dev:web`, `dev:api`, `dev:worker`, `lint`, `test`, `typecheck`, `build`, `migrate:api`, `bench:*`, and `verify:backfill`.
+28. Playwright production E2E must navigate to the app base path (`/chess_db`) rather than `/` to avoid false failures on the worker landing page.
+29. Web `fetchJson` must not set `Content-Type: application/json` for POSTs without a body (notably logout), or Fastify can return 400 before auth handlers run.
