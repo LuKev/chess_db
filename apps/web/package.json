@@ -12,6 +12,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.90.21",
     "chess.js": "^1.4.0",
     "next": "^15.5.2",
     "react": "^19.1.1",
