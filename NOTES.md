@@ -43,3 +43,4 @@
 27. Top-level npm scripts include `dev:web`, `dev:api`, `dev:worker`, `lint`, `test`, `typecheck`, `build`, `migrate:api`, `bench:*`, and `verify:backfill`.
 28. Playwright production E2E must navigate to the app base path (`/chess_db`) rather than `/` to avoid false failures on the worker landing page.
 29. Web `fetchJson` must not set `Content-Type: application/json` for POSTs without a body (notably logout), or Fastify can return 400 before auth handlers run.
+30. Auth form no longer pre-fills demo credentials; users must enter real email/password, preventing accidental failed logins after reload/logout.
