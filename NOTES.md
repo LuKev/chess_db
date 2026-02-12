@@ -39,8 +39,9 @@
 25. Railway custom-domain for `api.kezilu.com` was recreated and now requires:
    - CNAME `api.kezilu.com` -> `52so47f4.up.railway.app`.
    - Railway custom-domain status shows `certificateStatus=VALID` and DNS `PROPAGATED` (2026-02-11).
-26. Cloudflare `wrangler` auth is available, but current token context cannot update DNS records via v4 API (returns Cloudflare authentication error); DNS update requires a Zone DNS Edit-capable API token or manual dashboard change.
-27. Top-level npm scripts include `dev:web`, `dev:api`, `dev:worker`, `lint`, `test`, `typecheck`, `build`, `migrate:api`, `bench:*`, and `verify:backfill`.
-28. Playwright production E2E must navigate to the app base path (`/chess_db`) rather than `/` to avoid false failures on the worker landing page.
-29. Web `fetchJson` must not set `Content-Type: application/json` for POSTs without a body (notably logout), or Fastify can return 400 before auth handlers run.
-30. Auth form no longer pre-fills demo credentials; users must enter real email/password, preventing accidental failed logins after reload/logout.
+26. Top-level npm scripts include `dev:web`, `dev:api`, `dev:worker`, `lint`, `test`, `typecheck`, `build`, `migrate:api`, `bench:*`, and `verify:backfill`.
+27. Playwright production E2E must navigate to the app base path (`/chess_db`) rather than `/` to avoid false failures on the worker landing page.
+28. Web `fetchJson` must not set `Content-Type: application/json` for POSTs without a body (notably logout), or Fastify can return 400 before auth handlers run.
+29. Auth form no longer pre-fills demo credentials; users must enter real email/password, preventing accidental failed logins after reload/logout.
+30. API CORS/CSRF now supports both `https://kezilu.com` and `https://www.kezilu.com`. `CORS_ORIGIN` accepts a comma-separated origin allowlist.
+31. Web HTML responses are forced `Cache-Control: no-store` (but `_next/static` remains immutable) to prevent users seeing stale UI after deploys.
