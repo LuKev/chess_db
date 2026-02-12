@@ -339,11 +339,21 @@ async function fetchJson<T>(
     headers.set("content-type", "application/json");
   }
 
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    ...init,
-    credentials: "include",
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl()}${path}`, {
+      ...init,
+      credentials: "include",
+      headers,
+      // Avoid stale session/UI issues due to intermediary caching.
+      cache: "no-store",
+    });
+  } catch (error) {
+    return {
+      status: 0,
+      data: { error: `Network error: ${String(error)}` },
+    };
+  }
 
   let data: T | { error?: string };
   try {
@@ -359,10 +369,19 @@ async function fetchText(path: string, init: RequestInit = {}): Promise<{
   status: number;
   text: string;
 }> {
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    ...init,
-    credentials: "include",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl()}${path}`, {
+      ...init,
+      credentials: "include",
+      cache: "no-store",
+    });
+  } catch (error) {
+    return {
+      status: 0,
+      text: `Network error: ${String(error)}`,
+    };
+  }
 
   return {
     status: response.status,

@@ -36,6 +36,19 @@ async function registerViaUi(params: {
   });
 }
 
+async function loginViaUi(params: {
+  page: Page;
+  email: string;
+  password: string;
+}): Promise<void> {
+  await params.page.getByTestId("auth-email").fill(params.email);
+  await params.page.getByTestId("auth-password").fill(params.password);
+  await params.page.getByTestId("auth-login").click();
+  await expect(params.page.getByTestId("auth-status")).toContainText(params.email, {
+    timeout: 20_000,
+  });
+}
+
 test.describe("release-like browser coverage", () => {
   test("register, persist session across reload, logout, and login", async ({ page, baseURL }) => {
     const email = randomEmail("e2e-auth");
@@ -57,11 +70,17 @@ test.describe("release-like browser coverage", () => {
   });
 
   test("sample game seed and viewer open flow works", async ({ page, baseURL }) => {
-    const email = randomEmail("e2e-seed");
-    const password = "E2ePassword123!";
+    const configuredEmail = process.env.E2E_EMAIL?.trim();
+    const configuredPassword = process.env.E2E_PASSWORD?.trim();
+    const email = configuredEmail ?? randomEmail("e2e-seed");
+    const password = configuredPassword ?? "E2ePassword123!";
 
     await page.goto(appEntryPath(baseURL));
-    await registerViaUi({ page, email, password });
+    if (configuredEmail && configuredPassword) {
+      await loginViaUi({ page, email, password });
+    } else {
+      await registerViaUi({ page, email, password });
+    }
 
     await page.getByTestId("seed-insert-sample-game").click();
     await expect(page.getByRole("button", { name: "Open" }).first()).toBeVisible({
@@ -78,13 +97,19 @@ test.describe("release-like browser coverage", () => {
     context,
     baseURL,
   }) => {
-    const email = randomEmail("e2e-csrf");
-    const password = "E2ePassword123!";
+    const configuredEmail = process.env.E2E_EMAIL?.trim();
+    const configuredPassword = process.env.E2E_PASSWORD?.trim();
+    const email = configuredEmail ?? randomEmail("e2e-csrf");
+    const password = configuredPassword ?? "E2ePassword123!";
     const resolvedBaseUrl = baseURL ?? "http://127.0.0.1:3000";
     const apiOrigin = process.env.E2E_API_ORIGIN ?? apiOriginFromBase(resolvedBaseUrl);
 
     await page.goto(appEntryPath(baseURL));
-    await registerViaUi({ page, email, password });
+    if (configuredEmail && configuredPassword) {
+      await loginViaUi({ page, email, password });
+    } else {
+      await registerViaUi({ page, email, password });
+    }
 
     const cookies = await context.cookies(apiOrigin);
     const sessionCookie = cookies.find((cookie) => cookie.name.includes("chessdb_session"));

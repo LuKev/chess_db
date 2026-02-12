@@ -21,6 +21,12 @@ if (requiredApiOrigin && baseOrigin !== requiredApiOrigin) {
   );
 }
 
+const smokeEmail = process.env.SMOKE_EMAIL?.trim() || null;
+const smokePassword = process.env.SMOKE_PASSWORD?.trim() || null;
+if ((smokeEmail && !smokePassword) || (!smokeEmail && smokePassword)) {
+  throw new Error("Provide both SMOKE_EMAIL and SMOKE_PASSWORD (or neither).");
+}
+
 function randomEmail() {
   return `smoke-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}@example.com`;
 }
@@ -59,15 +65,21 @@ async function main() {
     throw new Error(`Health check failed: ${health.status}`);
   }
 
-  const email = randomEmail();
-  const password = "SmokePassword123!";
+  const email = smokeEmail ?? randomEmail();
+  const password = smokePassword ?? "SmokePassword123!";
 
-  const register = await jsonRequest("/api/auth/register", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
-  if (register.response.status !== 201) {
-    throw new Error(`Register failed: ${register.response.status} ${JSON.stringify(register.data)}`);
+  let registerStatus = null;
+  if (!smokeEmail) {
+    const register = await jsonRequest("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    registerStatus = register.response.status;
+    if (register.response.status !== 201) {
+      throw new Error(
+        `Register failed: ${register.response.status} ${JSON.stringify(register.data)}`
+      );
+    }
   }
 
   const login = await jsonRequest("/api/auth/login", {
@@ -177,7 +189,7 @@ async function main() {
         baseUrl,
         requiredApiOrigin: requiredApiOrigin ?? null,
         webOrigin,
-        registerStatus: register.response.status,
+        registerStatus,
         loginStatus: login.response.status,
         importStatus: importStatus.status,
         analysisStatus: analysis.response.status,
