@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../../../lib/api";
 import { useToasts } from "../../../components/ToastsProvider";
@@ -9,8 +9,7 @@ import { useSessionQuery } from "../../../features/auth/useSessionQuery";
 
 export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const next = searchParams.get("next") || "/games";
+  const [next, setNext] = useState("/games");
   const session = useSessionQuery();
   const queryClient = useQueryClient();
   const toasts = useToasts();
@@ -19,6 +18,17 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const parsed = new URLSearchParams(window.location.search);
+    const nextParam = parsed.get("next");
+    if (nextParam && nextParam.trim().length > 0) {
+      setNext(nextParam);
+    }
+  }, []);
 
   useEffect(() => {
     if (session.data?.user) {
@@ -100,4 +110,3 @@ export default function LoginPage() {
     </main>
   );
 }
-

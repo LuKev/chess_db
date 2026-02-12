@@ -1,23 +1,24 @@
 "use client";
 
 import { useEffect } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "../../components/AppShell";
 import { useSessionQuery } from "../../features/auth/useSessionQuery";
 
 export default function AppLayout(props: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const session = useSessionQuery();
-
-  const nextUrl = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
 
   useEffect(() => {
     if (!session.isLoading && session.data?.user === null) {
+      const nextUrl =
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search ?? ""}`
+          : pathname;
       router.replace(`/login?next=${encodeURIComponent(nextUrl)}`);
     }
-  }, [router, nextUrl, session.isLoading, session.data?.user]);
+  }, [router, pathname, session.isLoading, session.data?.user]);
 
   if (session.isLoading) {
     return (
@@ -53,4 +54,3 @@ export default function AppLayout(props: { children: React.ReactNode }) {
 
   return <AppShell userEmail={session.data.user.email}>{props.children}</AppShell>;
 }
-
