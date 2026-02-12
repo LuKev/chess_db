@@ -17,10 +17,11 @@ function randomEmail() {
 }
 
 async function jsonRequest(path, init = {}) {
+  const hasJsonBody = init.body !== undefined && !(init.body instanceof FormData);
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
-      "content-type": "application/json",
+      ...(hasJsonBody ? { "content-type": "application/json" } : {}),
       ...(init.headers ?? {}),
     },
   });
