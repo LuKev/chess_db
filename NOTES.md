@@ -1,47 +1,29 @@
-# Deployment Notes
+# Chess DB Workspace Notes
 
 ## Retention Policy
 1. Keep this file concise and durable (target 20-30 items).
 2. Keep only active constraints, unresolved blockers, key environment truths, and decisions that still affect implementation.
 3. Move superseded/historical detail into dated archives (`NOTES.archive.YYYY-MM-DD.md`).
 
-## Current Durable Notes
-1. Primary deploy target remains Railway with services `web`, `api`, `worker`; CI workflow and Railway deploy workflow are in `.github/workflows/ci.yml` and `.github/workflows/railway-deploy.yml`.
-2. API integration tests require `DATABASE_URL`; they intentionally skip when unset and run in CI when env is present.
-3. Local environment has Docker/Colima working (`docker compose` available).
-4. Import pipeline supports `.pgn` and `.pgn.zst`, async queue processing, parse diagnostics in `import_errors`, and strict duplicate mode via canonical hash.
-5. Analysis pipeline supports queued Stockfish jobs, cancellation, SSE stream updates, and persisted engine lines by game/ply.
-6. Export pipeline supports export-by-ids and export-by-query with include-annotations option.
-7. Core ChessBase-like data model is present (`game_positions`, `opening_stats`, `engine_lines`, `collections`, `tags`, `collection_games`, `game_tags`, upgraded `user_annotations`).
-8. Position search APIs are implemented:
-   - `POST /api/search/position`
-   - `POST /api/search/position/material`
-9. Opening explorer API is implemented: `GET /api/openings/tree`.
-10. Collections/tags APIs are implemented with bulk assignment/removal support (`/api/collections/:id/games`, `/api/tags/:id/games`).
-11. Saved filters support presets and shareable tokens (`/api/filters/presets`, `/api/filters/shared/:token`).
-12. Import diagnostics endpoint is implemented: `GET /api/imports/:id/errors`.
-13. Security hardening implemented: CSRF origin checks, auth brute-force rate limiting, audit event logging, idempotency keys on long-running job creation.
-14. Reliability hardening implemented: queue retries/backoff, dead-letter persistence, tenant-scoped dead-letter inspection endpoint.
-15. Startup hardening implemented: production topology validation (`PUBLIC_API_ORIGIN`, `PUBLIC_WEB_ORIGIN`, `CORS_ORIGIN`) and S3 bucket validation with optional strict mode.
-16. Observability baseline exists: API/worker Prometheus metrics, optional Sentry hooks, and local Grafana/Prometheus configs in `ops/observability/`.
-17. Query planner regression tests exist for key indexed paths (`apps/api/test/query_planner.integration.test.ts`).
-18. API and worker are wired to GCS S3-compatible storage; bucket provisioning helper exists in `scripts/setup_gcs_s3_railway.sh`.
-19. `api.kezilu.com` resolves and serves health successfully; current DNS points to `52so47f4.up.railway.app` and smoke checks pass against the custom domain.
-20. Release policy is now blocked on custom-domain health (`api.kezilu.com`) only; browser E2E + smoke gates are wired in CI workflow.
-21. Web app supports keyboard-first viewer navigation, recently-viewed list, password reset UI, annotation undo/redo + autosave status, FEN board editor, opening breadcrumb/depth explorer, and tag/collection edit/delete UX.
-22. API game listing supports optional position node filtering via `GET /api/games?positionFen=...` (normalized FEN match against `game_positions`).
-23. Release ops artifacts now exist:
-   - `docs/release_readiness_checklist.md`
-   - `docs/rollback_playbook.md`
-24. Scheduled ops checks exist in `.github/workflows/nightly-slo.yml`:
-   - strict API SLO benchmark (`npm run bench:slo`)
-   - optional strict backfill verification (`npm run verify:backfill`) when `BACKFILL_VERIFY_DATABASE_URL` secret is set.
-25. Railway custom-domain for `api.kezilu.com` was recreated and now requires:
-   - CNAME `api.kezilu.com` -> `52so47f4.up.railway.app`.
-   - Railway custom-domain status shows `certificateStatus=VALID` and DNS `PROPAGATED` (2026-02-11).
-26. Top-level npm scripts include `dev:web`, `dev:api`, `dev:worker`, `lint`, `test`, `typecheck`, `build`, `migrate:api`, `bench:*`, and `verify:backfill`.
-27. Playwright production E2E must navigate to the app base path (`/chess_db`) rather than `/` to avoid false failures on the worker landing page.
-28. Web `fetchJson` must not set `Content-Type: application/json` for POSTs without a body (notably logout), or Fastify can return 400 before auth handlers run.
-29. Auth form no longer pre-fills demo credentials; users must enter real email/password, preventing accidental failed logins after reload/logout.
-30. API CORS/CSRF now supports both `https://kezilu.com` and `https://www.kezilu.com`. `CORS_ORIGIN` accepts a comma-separated origin allowlist.
-31. Web HTML responses are forced `Cache-Control: no-store` (but `_next/static` remains immutable) to prevent users seeing stale UI after deploys.
+## Current Durable Notes (Accurate Snapshot)
+1. Repo root: `/Users/kevin/projects/chess_db` (monorepo: `apps/web`, `apps/api`, `apps/worker`).
+2. Primary deploy target is Railway with services `web`, `api`, `worker`; CI in `.github/workflows/ci.yml`, deploy workflow in `.github/workflows/railway-deploy.yml`.
+3. Production domains: web served under `/chess_db` on `kezilu.com`; API at `https://api.kezilu.com` (custom domain).
+4. API CORS/CSRF allowlists include both `https://kezilu.com` and `https://www.kezilu.com`; `CORS_ORIGIN` supports comma-separated origins.
+5. Smoke checks: `SMOKE_API_BASE_URL=https://api.kezilu.com RELEASE_REQUIRED_API_ORIGIN=https://api.kezilu.com node scripts/smoke_post_deploy.mjs`.
+6. Playwright E2E is configured to run against production base path via `PLAYWRIGHT_BASE_URL=https://kezilu.com/chess_db` and validates: register/login/reload/logout, seed sample game via `/diagnostics`, CSRF negative-case, password reset UI.
+7. Web now uses an app-shell + auth gate under `apps/web/app/(app)/layout.tsx`; public login at `apps/web/app/(public)/login/page.tsx`.
+8. Important web routing gotcha: normalize `next` redirects to avoid `/chess_db/chess_db/...` 404s; handled via `apps/web/lib/basePath.ts` (`stripAppBasePath`).
+9. Web pages implemented (non-diagnostics): `/games`, `/games/[gameId]`, `/import`, `/search/position`, `/openings`, `/tags`, `/collections` (others still stubbed).
+10. Legacy all-in-one UI remains at `/diagnostics` (still used by E2E seed/open flow) while feature pages are extracted.
+11. Import pipeline exists (async jobs, supports `.pgn` and `.pgn.zst`); UI currently implemented on `/import` for queue sample import and upload.
+12. Position search API exists (`POST /api/search/position`); UI currently implemented on `/search/position` (raw FEN input, exact match).
+13. Opening tree API exists (`GET /api/openings/tree`); UI currently implemented on `/openings` (FEN + depth, basic breadcrumb).
+14. Tags and collections APIs exist with CRUD + bulk assignment; basic management UI exists on `/tags` and `/collections`.
+15. Generated test artifacts: Playwright outputs `apps/web/test-results/` and `apps/web/playwright-report/` and are ignored in `.gitignore`.
+16. Local environment: Docker is present at `/opt/homebrew/bin/docker`.
+17. Tooling constraint: destructive shell commands may be blocked by policy (e.g. `rm -rf`, `git rm --cached`); prefer non-destructive edits via `apply_patch` or add ignores.
+18. Deployment blocker (current): Railway CLI auth/token appears invalid:
+    - Local `railway` commands fail (`error decoding response body`).
+    - GitHub Actions `Railway Deploy` fails with `Unauthorized. Please login with railway login` when running `railway up`.
+    - Likely requires refreshing the GitHub `RAILWAY_TOKEN` secret and/or re-authenticating locally.
