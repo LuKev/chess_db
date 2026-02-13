@@ -53,6 +53,33 @@ type EngineLinesResponse = {
   items: EngineLine[];
 };
 
+type AnalysisCreateResponse = {
+  id: number;
+  status: string;
+  cached?: boolean;
+  idempotentReplay?: boolean;
+};
+
+type AnalysisStatusResponse = {
+  id: number;
+  status: string;
+  fen: string;
+  limits: {
+    depth: number | null;
+    nodes: number | null;
+    timeMs: number | null;
+  };
+  result: {
+    bestMove: string | null;
+    pv: string | null;
+    evalCp: number | null;
+    evalMate: number | null;
+  };
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type BoardSquare = {
   square: string;
   piece: { type: PieceSymbol; color: "w" | "b" } | null;
@@ -103,6 +130,10 @@ export default function GameViewerPage() {
   const [rootComment, setRootComment] = useState("");
   const [annotationStatus, setAnnotationStatus] = useState("Load annotations to start.");
   const [annotationDirty, setAnnotationDirty] = useState(false);
+  const [analysisDepth, setAnalysisDepth] = useState(18);
+  const [analysisRequestId, setAnalysisRequestId] = useState<number | null>(null);
+  const [analysisStatus, setAnalysisStatus] = useState<string>("No analysis request yet.");
+  const [analysisResult, setAnalysisResult] = useState<AnalysisStatusResponse | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -191,6 +222,53 @@ export default function GameViewerPage() {
     },
   });
 
+  useEffect(() => {
+    if (!analysisRequestId) {
+      return;
+    }
+
+    let stopped = false;
+    setAnalysisStatus(`Polling analysis #${analysisRequestId}...`);
+
+    const interval = setInterval(() => {
+      if (stopped) {
+        return;
+      }
+      void (async () => {
+        const response = await fetchJson<AnalysisStatusResponse>(`/api/analysis/${analysisRequestId}`, {
+          method: "GET",
+        });
+        if (response.status !== 200 || !("status" in response.data)) {
+          setAnalysisStatus(
+            "error" in response.data && response.data.error
+              ? response.data.error
+              : `Failed to poll analysis (status ${response.status})`
+          );
+          return;
+        }
+        setAnalysisResult(response.data);
+        const status = response.data.status;
+        if (status === "completed") {
+          setAnalysisStatus("Analysis completed.");
+          stopped = true;
+        } else if (status === "failed") {
+          setAnalysisStatus(`Analysis failed: ${response.data.error ?? "unknown error"}`);
+          stopped = true;
+        } else if (status === "cancelled") {
+          setAnalysisStatus("Analysis cancelled.");
+          stopped = true;
+        } else {
+          setAnalysisStatus(`Analysis ${status}...`);
+        }
+      })();
+    }, 1000);
+
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [analysisRequestId]);
+
   const derived = useMemo(() => {
     const startingFen = game.data?.startingFen ?? "startpos";
     const pgnText = pgn.data ?? "";
@@ -215,6 +293,86 @@ export default function GameViewerPage() {
       fen: fens[safeCursor] ?? "",
     };
   }, [cursor, game.data?.startingFen, pgn.data]);
+
+  async function runAnalysis(): Promise<void> {
+    if (!derived.fen) {
+      return;
+    }
+    setAnalysisStatus("Queueing analysis...");
+    setAnalysisResult(null);
+    const response = await fetchJson<AnalysisCreateResponse>("/api/analysis", {
+      method: "POST",
+      body: JSON.stringify({
+        fen: derived.fen,
+        depth: analysisDepth,
+      }),
+    });
+    if ((response.status !== 201 && response.status !== 200) || !("id" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to queue analysis (status ${response.status})`;
+      setAnalysisStatus(msg);
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    setAnalysisRequestId(response.data.id);
+    setAnalysisStatus(`Queued analysis #${response.data.id}`);
+  }
+
+  async function cancelAnalysis(): Promise<void> {
+    if (!analysisRequestId) {
+      return;
+    }
+    const response = await fetchJson<{ id: number; status: string }>(`/api/analysis/${analysisRequestId}/cancel`, {
+      method: "POST",
+    });
+    if (response.status !== 200 || !("status" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to cancel analysis (status ${response.status})`;
+      setAnalysisStatus(msg);
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    setAnalysisStatus(`Cancel requested (status: ${response.data.status}).`);
+  }
+
+  async function saveAnalysisLine(): Promise<void> {
+    if (!analysisResult || analysisResult.status !== "completed") {
+      return;
+    }
+    const pvUci = analysisResult.result.pv ? analysisResult.result.pv.split(/\s+/g).filter(Boolean) : [];
+    const response = await fetchJson<{ id: number; createdAt: string }>("/api/analysis/store", {
+      method: "POST",
+      body: JSON.stringify({
+        gameId,
+        ply: cursor,
+        fen: analysisResult.fen,
+        engine: "stockfish",
+        depth: analysisResult.limits.depth ?? analysisDepth,
+        multipv: 1,
+        pvUci,
+        pvSan: [],
+        evalCp: analysisResult.result.evalCp ?? undefined,
+        evalMate: analysisResult.result.evalMate ?? undefined,
+        nodes: analysisResult.limits.nodes ?? undefined,
+        timeMs: analysisResult.limits.timeMs ?? undefined,
+        source: "manual",
+      }),
+    });
+    if (response.status !== 201) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to store line (status ${response.status})`;
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    toasts.pushToast({ kind: "success", message: "Saved engine line" });
+    await queryClient.invalidateQueries({ queryKey: ["engine-lines", { gameId, ply: cursor }] });
+  }
 
   async function saveAnnotations(): Promise<void> {
     if (!annotations.data) {
@@ -447,6 +605,47 @@ export default function GameViewerPage() {
               </tbody>
             </table>
           </div>
+        ) : null}
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Analysis</h2>
+          <div className="button-row">
+            <button type="button" onClick={() => void runAnalysis()} disabled={!derived.fen}>
+              Run analysis
+            </button>
+            <button type="button" onClick={() => void cancelAnalysis()} disabled={!analysisRequestId}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveAnalysisLine()}
+              disabled={!analysisResult || analysisResult.status !== "completed"}
+            >
+              Save line
+            </button>
+          </div>
+        </div>
+
+        <div className="auth-grid">
+          <label>
+            Depth
+            <input
+              value={String(analysisDepth)}
+              onChange={(event) => setAnalysisDepth(Number(event.target.value))}
+              placeholder="18"
+            />
+          </label>
+          <label>
+            Current FEN
+            <input value={derived.fen} readOnly />
+          </label>
+        </div>
+
+        <p className="muted">{analysisStatus}</p>
+        {analysisResult ? (
+          <pre className="pgn-pre">{JSON.stringify(analysisResult.result, null, 2)}</pre>
         ) : null}
       </section>
     </main>
