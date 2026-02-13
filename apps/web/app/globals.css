@@ -260,6 +260,34 @@ textarea {
 }
 
 .table-wrap {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 900px;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+  font-size: 13px;
+  text-align: left;
+  vertical-align: top;
+}
+
+thead th {
+  background: rgba(47, 111, 79, 0.08);
+  position: sticky;
+  top: 0;
+}
+
+.table-wrap {
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
