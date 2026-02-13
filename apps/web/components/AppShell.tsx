@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { usePathname } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { fetchJson } from "../lib/api";
 import { useToasts } from "./ToastsProvider";
 
@@ -48,6 +49,20 @@ export function AppShell(props: {
   const pathname = usePathname();
   const queryClient = useQueryClient();
   const toasts = useToasts();
+  const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    function onResize() {
+      if (window.innerWidth > 920) {
+        setNavOpen(false);
+      }
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function logout(): Promise<void> {
     const response = await fetchJson<{ ok: boolean }>("/api/auth/logout", { method: "POST" }, { jsonBody: false });
@@ -70,23 +85,10 @@ export function AppShell(props: {
 
   return (
     <div
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        gridTemplateColumns: "260px 1fr",
-      }}
+      className="app-shell"
     >
       <aside
-        style={{
-          borderRight: "1px solid var(--line)",
-          background: "rgba(255,255,255,0.7)",
-          backdropFilter: "blur(10px)",
-          padding: 14,
-          position: "sticky",
-          top: 0,
-          height: "100vh",
-          overflow: "auto",
-        }}
+        className={`app-shell-nav ${navOpen ? "open" : ""}`}
       >
         <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
           <div style={{ fontWeight: 700 }}>Chess DB</div>
@@ -112,6 +114,7 @@ export function AppShell(props: {
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={() => setNavOpen(false)}
                     style={{
                       textDecoration: "none",
                       color: "var(--text)",
@@ -129,7 +132,16 @@ export function AppShell(props: {
           </div>
         ))}
       </aside>
-      <div>{props.children}</div>
+      <div className="app-shell-content">
+        <header className="app-shell-top">
+          <button type="button" onClick={() => setNavOpen((v) => !v)}>
+            Menu
+          </button>
+          <div style={{ fontWeight: 700 }}>Chess DB</div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>{props.userEmail}</div>
+        </header>
+        {props.children}
+      </div>
     </div>
   );
 }

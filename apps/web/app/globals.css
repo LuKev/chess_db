@@ -19,6 +19,41 @@ body {
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+}
+
+.app-shell-nav {
+  border-right: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  padding: 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: auto;
+}
+
+.app-shell-content {
+  min-width: 0;
+}
+
+.app-shell-top {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(10px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
 main {
   max-width: 1050px;
   margin: 0 auto;
@@ -257,6 +292,26 @@ textarea {
 }
 
 @media (max-width: 920px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .app-shell-top {
+    display: flex;
+  }
+  .app-shell-nav {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: min(320px, 86vw);
+    height: 100vh;
+    transform: translateX(-110%);
+    transition: transform 160ms ease;
+    z-index: 20;
+    box-shadow: 0 16px 30px rgba(0, 0, 0, 0.18);
+  }
+  .app-shell-nav.open {
+    transform: translateX(0);
+  }
   .viewer-grid {
     grid-template-columns: 1fr;
   }
