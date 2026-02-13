@@ -37,6 +37,11 @@ const ImportCreateQuerySchema = z.object({
     .optional(),
 });
 
+const StarterSeedSchema = z.object({
+  // Keep this modest for first-run UX; can be increased later.
+  maxGames: z.number().int().positive().max(10_000).default(1000),
+});
+
 const SamplePgnSeed = [
   `[Event "Sample 1"]`,
   `[Site "Chess DB"]`,
@@ -72,6 +77,27 @@ const SamplePgnSeed = [
   `1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Nf3 Be7 5. Bf4 O-O 6. e3 c5 0-1`,
   ``,
 ].join("\\n");
+
+async function resolveLatestLichessBroadcastUrl(): Promise<string> {
+  const response = await fetch("https://database.lichess.org/broadcast/list.txt", {
+    method: "GET",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch Lichess broadcast list (status ${response.status})`);
+  }
+  const text = await response.text();
+  const first = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)[0];
+  if (!first) {
+    throw new Error("Lichess broadcast list is empty");
+  }
+  if (!first.startsWith("https://database.lichess.org/broadcast/") || !first.endsWith(".pgn.zst")) {
+    throw new Error(`Unexpected broadcast list entry: ${first}`);
+  }
+  return first;
+}
 
 function hasAllowedExtension(fileName: string): boolean {
   const lower = fileName.toLowerCase();
@@ -137,6 +163,98 @@ export async function registerImportRoutes(
         [importJobId]
       );
       return reply.status(500).send({ error: "Failed to enqueue sample import" });
+    }
+  });
+
+  app.post("/api/imports/starter", { preHandler: requireUser }, async (request, reply) => {
+    const parsed = StarterSeedSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Invalid request body",
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const existingGames = await pool.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total
+       FROM games
+       WHERE user_id = $1`,
+      [request.user!.id]
+    );
+    if (Number(existingGames.rows[0].total) > 0) {
+      return reply.status(409).send({
+        error: "Starter seed is intended for empty accounts. Your account already has games.",
+      });
+    }
+
+    let starterUrl: string;
+    try {
+      starterUrl = await resolveLatestLichessBroadcastUrl();
+    } catch (error) {
+      request.log.error(error);
+      return reply.status(502).send({ error: "Failed to resolve starter seed URL" });
+    }
+
+    const urlPath = new URL(starterUrl).pathname;
+    const fileName = urlPath.split("/").pop() ?? "starter.pgn.zst";
+
+    const createJobResult = await pool.query<{ id: number | string }>(
+      `INSERT INTO import_jobs (user_id, status, strict_duplicate_mode, max_games)
+       VALUES ($1, 'queued', FALSE, $2)
+       RETURNING id`,
+      [request.user!.id, parsed.data.maxGames]
+    );
+    const importJobId = toId(createJobResult.rows[0].id);
+    const objectKey = buildImportObjectKey({
+      userId: request.user!.id,
+      importJobId,
+      fileName,
+    });
+
+    try {
+      const remote = await fetch(starterUrl, { method: "GET" });
+      if (!remote.ok || !remote.body) {
+        return reply.status(502).send({
+          error: `Failed to download starter seed from upstream (status ${remote.status})`,
+        });
+      }
+
+      await storage.uploadObject({
+        key: objectKey,
+        // Node's fetch/undici stream types don't always align with Readable.fromWeb typings.
+        body: Readable.fromWeb(remote.body as unknown as import("node:stream/web").ReadableStream),
+        contentType: "application/zstd",
+      });
+
+      await pool.query(
+        `UPDATE import_jobs
+         SET source_object_key = $2, updated_at = NOW()
+         WHERE id = $1`,
+        [importJobId, objectKey]
+      );
+
+      await queue.enqueueImport({
+        importJobId,
+        userId: request.user!.id,
+      });
+
+      return reply.status(201).send({
+        id: importJobId,
+        status: "queued",
+        objectKey,
+        starter: true,
+        maxGames: parsed.data.maxGames,
+        upstream: "lichess_broadcast",
+      });
+    } catch (error) {
+      request.log.error(error);
+      await pool.query(
+        `UPDATE import_jobs
+         SET status = 'failed', updated_at = NOW(), parse_errors = parse_errors + 1
+         WHERE id = $1`,
+        [importJobId]
+      );
+      return reply.status(500).send({ error: "Failed to enqueue starter import" });
     }
   });
 
@@ -312,6 +430,7 @@ export async function registerImportRoutes(
         status: string;
         source_object_key: string | null;
         strict_duplicate_mode: boolean;
+        max_games: number | null;
         total_games: number;
         inserted_games: number;
         duplicate_games: number;
@@ -326,6 +445,7 @@ export async function registerImportRoutes(
           status,
           source_object_key,
           strict_duplicate_mode,
+          max_games,
           total_games,
           inserted_games,
           duplicate_games,
@@ -366,6 +486,7 @@ export async function registerImportRoutes(
         status: job.status,
         sourceObjectKey: job.source_object_key,
         strictDuplicateMode: job.strict_duplicate_mode,
+        maxGames: job.max_games,
         totals: {
           parsed: job.total_games,
           inserted: job.inserted_games,
@@ -477,6 +598,7 @@ export async function registerImportRoutes(
       id: number | string;
       status: string;
       strict_duplicate_mode: boolean;
+      max_games: number | null;
       total_games: number;
       inserted_games: number;
       duplicate_games: number;
@@ -490,6 +612,7 @@ export async function registerImportRoutes(
         id,
         status,
         strict_duplicate_mode,
+        max_games,
         total_games,
         inserted_games,
         duplicate_games,
@@ -513,6 +636,7 @@ export async function registerImportRoutes(
         id: toId(row.id),
         status: row.status,
         strictDuplicateMode: row.strict_duplicate_mode,
+        maxGames: row.max_games,
         totals: {
           parsed: row.total_games,
           inserted: row.inserted_games,

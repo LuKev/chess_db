@@ -342,8 +342,9 @@ export async function processImportJob(
     source_object_key: string | null;
     user_id: number | string;
     strict_duplicate_mode: boolean;
+    max_games: number | null;
   }>(
-    `SELECT id, source_object_key, user_id, strict_duplicate_mode
+    `SELECT id, source_object_key, user_id, strict_duplicate_mode, max_games
      FROM import_jobs
      WHERE id = $1`,
     [params.importJobId]
@@ -411,6 +412,11 @@ export async function processImportJob(
           status: "running",
           counters,
         });
+      }
+
+      // Import jobs may optionally set a max game count (used for starter seeds).
+      if (job.max_games && counters.parsed >= job.max_games) {
+        break;
       }
     }
 

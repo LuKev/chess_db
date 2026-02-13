@@ -109,6 +109,26 @@ export default function ImportPage() {
     await queryClient.invalidateQueries({ queryKey: ["imports"] });
   }
 
+  async function queueStarterSeed(): Promise<void> {
+    const response = await fetchJson<{ id: number; maxGames: number }>("/api/imports/starter", {
+      method: "POST",
+      body: JSON.stringify({ maxGames: 1000 }),
+    });
+    if (response.status !== 201) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to queue starter import (status ${response.status})`;
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    toasts.pushToast({
+      kind: "success",
+      message: `Queued starter import (#${"id" in response.data ? response.data.id : "?"})`,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["imports"] });
+  }
+
   async function uploadImport(): Promise<void> {
     if (!file) {
       return;
@@ -156,6 +176,9 @@ export default function ImportPage() {
         <div className="button-row">
           <button type="button" onClick={() => void queueSampleImport()}>
             Queue sample import
+          </button>
+          <button type="button" onClick={() => void queueStarterSeed()}>
+            Seed 1000 starter games
           </button>
           <label className="checkbox-label">
             <input

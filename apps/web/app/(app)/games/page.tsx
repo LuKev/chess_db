@@ -149,6 +149,25 @@ export default function GamesPage() {
     });
   }
 
+  async function queueStarterImport(): Promise<void> {
+    const response = await fetchJson<{ id: number }>("/api/imports/starter", {
+      method: "POST",
+      body: JSON.stringify({ maxGames: 1000 }),
+    });
+    if (response.status !== 201) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to queue starter import (status ${response.status})`;
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    toasts.pushToast({
+      kind: "success",
+      message: `Queued starter import (#${"id" in response.data ? response.data.id : "?"}). See Import page for status.`,
+    });
+  }
+
   async function createSampleGame(): Promise<void> {
     const sampleHash = `sample-${Date.now()}`;
     const response = await fetchJson<{ id: number }>("/api/games", {
@@ -524,8 +543,11 @@ export default function GamesPage() {
                   Your account starts empty. Games are populated by importing PGNs (recommended) or by inserting a sample game.
                 </p>
                 <div className="button-row">
+                  <button type="button" onClick={() => void queueStarterImport()}>
+                    Seed 1000 starter games
+                  </button>
                   <button type="button" onClick={() => void queueSampleImport()}>
-                    Queue sample import
+                    Queue small sample import
                   </button>
                   <Link href="/import">Import PGN</Link>
                   <button type="button" onClick={() => void createSampleGame()}>
