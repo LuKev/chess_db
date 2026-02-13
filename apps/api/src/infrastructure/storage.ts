@@ -2,6 +2,7 @@ import {
   CreateBucketCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
@@ -12,7 +13,8 @@ export type ObjectStorage = {
   ensureBucket(): Promise<void>;
   uploadObject(params: {
     key: string;
-    body: Readable;
+    // Prefer Buffer/string for small objects to avoid multipart edge cases on some S3-compatible providers.
+    body: Readable | Buffer | string;
     contentType: string;
   }): Promise<void>;
   getObjectStream(key: string): Promise<Readable>;
@@ -60,6 +62,19 @@ export function createObjectStorage(config: AppConfig): ObjectStorage {
 
     async uploadObject(params): Promise<void> {
       await this.ensureBucket();
+      if (typeof params.body === "string" || Buffer.isBuffer(params.body)) {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: config.s3Bucket,
+            Key: params.key,
+            Body: params.body,
+            ContentType: params.contentType,
+          })
+        );
+        return;
+      }
+
+      // Large uploads: use multipart upload implementation.
       const upload = new Upload({
         client,
         params: {

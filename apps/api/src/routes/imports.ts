@@ -301,7 +301,7 @@ export async function registerImportRoutes(
     try {
       await storage.uploadObject({
         key: objectKey,
-        body: Readable.from([SamplePgnSeed]),
+        body: SamplePgnSeed,
         contentType: "application/x-chess-pgn",
       });
       await pool.query(
@@ -391,7 +391,7 @@ export async function registerImportRoutes(
 
       await storage.uploadObject({
         key: objectKey,
-        body: Readable.from([extracted.pgnText]),
+        body: Buffer.from(extracted.pgnText, "utf8"),
         contentType: "application/x-chess-pgn",
       });
 
