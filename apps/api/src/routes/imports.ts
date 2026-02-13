@@ -414,6 +414,7 @@ export async function registerImportRoutes(
         starter: true,
         maxGames: extracted.gameCount,
         upstream: "lichess_broadcast",
+        seedImplementation: "extract_v2",
       });
     } catch (error) {
       request.log.error(error);
