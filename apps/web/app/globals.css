@@ -27,6 +27,19 @@ main {
   gap: 14px;
 }
 
+.muted {
+  opacity: 0.75;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
