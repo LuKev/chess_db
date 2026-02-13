@@ -27,7 +27,10 @@
     - Local `railway` commands fail (`error decoding response body`).
     - GitHub Actions `Railway Deploy` fails with `Unauthorized. Please login with railway login` when running `railway up`.
     - Likely requires refreshing the GitHub `RAILWAY_TOKEN` secret and/or re-authenticating locally.
-- Games are per-user. A new account starts empty until a PGN import job runs and the worker processes it into `games`.
-- If "Seed starter games" or uploads queue but no games appear, the most common cause is the worker not running / BullMQ-Redis connection miswiring (imports stay `queued`).
-- `POST /api/imports/starter` now extracts ~N games into a `.pgn` before uploading, instead of storing the full upstream `.pgn.zst` blob.
-- `POST /api/imports/starter` must store the object key ending in `.pgn` (not `.pgn.zst`) or the worker will attempt zstd decompression and fail with `invalid zstd data`.
+19. Games are per-user. A new account starts empty until a PGN import job runs and the worker processes it into `games`.
+20. If "Seed starter games" or uploads queue but no games appear, the most common cause is the worker not running / BullMQ-Redis connection miswiring (imports stay `queued`).
+21. `POST /api/imports/starter` now extracts ~N games into a `.pgn` before uploading, instead of storing the full upstream `.pgn.zst` blob.
+22. `POST /api/imports/starter` must store the object key ending in `.pgn` (not `.pgn.zst`) or the worker will attempt zstd decompression and fail with `invalid zstd data`.
+23. Web UI convention: prefer lighter/smaller buttons (reduced padding/radius, tighter typography) and shared utility classes in `apps/web/app/globals.css` over per-component inline styles.
+24. `/games` filters are reactive (no "Apply" button): changing any filter resets to page 1 and clears selection to avoid stale bulk actions.
+25. Password reset UX on `/login` is a two-step flow: step 1 requests a token by email; step 2 submits token + new password, and is disabled until a request has been made (or a token is present).
