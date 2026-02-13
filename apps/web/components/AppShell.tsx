@@ -87,9 +87,11 @@ export function AppShell(props: {
       >
         <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
           <div style={{ fontWeight: 700 }}>Chess DB</div>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>{props.userEmail}</div>
+          <div style={{ fontSize: 12, opacity: 0.7 }} data-testid="user-email">
+            {props.userEmail}
+          </div>
           <div className="button-row">
-            <button type="button" onClick={() => void logout()}>
+            <button type="button" onClick={() => void logout()} data-testid="auth-logout">
               Logout
             </button>
           </div>
