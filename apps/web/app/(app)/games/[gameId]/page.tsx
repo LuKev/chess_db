@@ -3,7 +3,7 @@
 import { Chess, type PieceSymbol } from "chess.js";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchJson, fetchText } from "../../../../lib/api";
 
@@ -67,6 +67,21 @@ export default function GameViewerPage() {
   const params = useParams<{ gameId: string }>();
   const gameId = Number(params.gameId);
   const [cursor, setCursor] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const parsed = new URLSearchParams(window.location.search);
+    const plyRaw = parsed.get("ply");
+    if (!plyRaw) {
+      return;
+    }
+    const ply = Number(plyRaw);
+    if (Number.isInteger(ply) && ply >= 0) {
+      setCursor(ply);
+    }
+  }, []);
 
   const game = useQuery({
     queryKey: ["game", { gameId }],
@@ -233,4 +248,3 @@ export default function GameViewerPage() {
     </main>
   );
 }
-

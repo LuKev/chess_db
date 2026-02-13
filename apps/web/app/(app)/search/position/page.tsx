@@ -120,7 +120,7 @@ export default function PositionSearchPage() {
                         .join(" ")}
                     </td>
                     <td>
-                      <Link href={`/games/${row.gameId}`}>Open</Link>
+                      <Link href={`/games/${row.gameId}?ply=${row.ply}`}>Open</Link>
                     </td>
                   </tr>
                 ))}
@@ -139,4 +139,3 @@ export default function PositionSearchPage() {
     </main>
   );
 }
-
