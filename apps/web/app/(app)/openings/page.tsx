@@ -34,6 +34,7 @@ export default function OpeningsPage() {
   const [fen, setFen] = useState("startpos");
   const [depth, setDepth] = useState(2);
   const [tree, setTree] = useState<OpeningTreeNode | null>(null);
+  const [activeFenNorm, setActiveFenNorm] = useState<string | null>(null);
   const [status, setStatus] = useState("Load an opening tree from your database.");
   const [path, setPath] = useState<Array<{ fen: string; label: string }>>([]);
   const toasts = useToasts();
@@ -64,6 +65,7 @@ export default function OpeningsPage() {
     }
     setTree(response.data.tree);
     setFen(response.data.fenNorm);
+    setActiveFenNorm(response.data.fenNorm);
     setPath(nextPath ?? [{ fen: response.data.fenNorm, label }]);
     setStatus(
       `Loaded ${response.data.tree.moves.length} move(s) at depth ${response.data.depth} (total games: ${response.data.tree.totalGames})`
@@ -141,6 +143,12 @@ export default function OpeningsPage() {
                 {entry.label}
               </button>
             ))}
+            {activeFenNorm ? (
+              <>
+                <Link href={`/games?positionFen=${encodeURIComponent(activeFenNorm)}`}>Filter games</Link>
+                <Link href={`/search/position?fen=${encodeURIComponent(activeFenNorm)}`}>Position search</Link>
+              </>
+            ) : null}
           </div>
         ) : (
           <p className="muted">No path yet.</p>
@@ -196,4 +204,3 @@ export default function OpeningsPage() {
     </main>
   );
 }
-

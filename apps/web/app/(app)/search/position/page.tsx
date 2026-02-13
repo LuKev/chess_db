@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fetchJson } from "../../../../lib/api";
 import { useToasts } from "../../../../components/ToastsProvider";
 
@@ -34,6 +34,17 @@ export default function PositionSearchPage() {
   const [status, setStatus] = useState("Enter a FEN and search.");
   const [results, setResults] = useState<PositionSearchResponse | null>(null);
   const toasts = useToasts();
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const parsed = new URLSearchParams(window.location.search);
+    const fenParam = parsed.get("fen");
+    if (fenParam && fenParam.trim()) {
+      setFen(fenParam.trim());
+    }
+  }, []);
 
   async function searchExact(): Promise<void> {
     setBusy(true);
