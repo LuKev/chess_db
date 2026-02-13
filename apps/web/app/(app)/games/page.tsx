@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../../../lib/api";
 import { useToasts } from "../../../components/ToastsProvider";
@@ -51,10 +51,22 @@ export default function GamesPage() {
   const [toDate, setToDate] = useState("");
   const [collectionId, setCollectionId] = useState<number | "">("");
   const [tagId, setTagId] = useState<number | "">("");
+  const [positionFen, setPositionFen] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
 
   const queryClient = useQueryClient();
   const toasts = useToasts();
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const parsed = new URLSearchParams(window.location.search);
+    const pos = parsed.get("positionFen");
+    if (pos && pos.trim()) {
+      setPositionFen(pos.trim());
+    }
+  }, []);
 
   const query = useMemo(() => {
     const params = new URLSearchParams();
@@ -69,13 +81,14 @@ export default function GamesPage() {
     if (toDate.trim()) params.set("toDate", toDate.trim());
     if (collectionId !== "") params.set("collectionId", String(collectionId));
     if (tagId !== "") params.set("tagId", String(tagId));
+    if (positionFen.trim()) params.set("positionFen", positionFen.trim());
     return `?${params.toString()}`;
-  }, [page, sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId]);
+  }, [page, sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen]);
 
   const games = useQuery({
     queryKey: [
       "games",
-      { page, sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId },
+      { page, sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen },
     ],
     queryFn: async (): Promise<GamesResponse> => {
       const response = await fetchJson<GamesResponse>(`/api/games${query}`, { method: "GET" });
@@ -364,6 +377,10 @@ export default function GamesPage() {
                 </option>
               ))}
             </select>
+          </label>
+          <label>
+            Position FEN
+            <input value={positionFen} onChange={(event) => setPositionFen(event.target.value)} placeholder="startpos or FEN" />
           </label>
           <div className="button-row" style={{ alignSelf: "end" }}>
             <button
