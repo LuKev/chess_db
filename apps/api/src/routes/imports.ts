@@ -363,7 +363,9 @@ export async function registerImportRoutes(
 
     const urlPath = new URL(starterUrl).pathname;
     const upstreamFileName = urlPath.split("/").pop() ?? "starter.pgn.zst";
-    const fileName = upstreamFileName.replace(/\\.pgn\\.zst$/i, ".pgn");
+    // Always store starter seeds as plain PGN so the worker does not attempt zstd decompression.
+    // (Some S3-compatible providers also have rough edges with large multipart uploads.)
+    const fileName = "starter-seed.pgn";
 
     const createJobResult = await pool.query<{ id: number | string }>(
       `INSERT INTO import_jobs (user_id, status, strict_duplicate_mode, max_games)
@@ -414,6 +416,7 @@ export async function registerImportRoutes(
         starter: true,
         maxGames: extracted.gameCount,
         upstream: "lichess_broadcast",
+        upstreamFileName,
         seedImplementation: "extract_v2",
       });
     } catch (error) {
