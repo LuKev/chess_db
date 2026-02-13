@@ -64,6 +64,10 @@ export function AppShell(props: {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  useEffect(() => {
+    setNavOpen(false);
+  }, [pathname]);
+
   async function logout(): Promise<void> {
     const response = await fetchJson<{ ok: boolean }>("/api/auth/logout", { method: "POST" }, { jsonBody: false });
     if (response.status !== 200) {
@@ -84,15 +88,20 @@ export function AppShell(props: {
   const sections = groupNav(NAV);
 
   return (
-    <div
-      className="app-shell"
-    >
+    <div className="app-shell">
+      <button
+        type="button"
+        className={`app-shell-overlay ${navOpen ? "open" : ""}`}
+        onClick={() => setNavOpen(false)}
+        aria-label="Close navigation"
+      />
       <aside
+        id="app-nav"
         className={`app-shell-nav ${navOpen ? "open" : ""}`}
       >
-        <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
-          <div style={{ fontWeight: 700 }}>Chess DB</div>
-          <div style={{ fontSize: 12, opacity: 0.7 }} data-testid="user-email">
+        <div className="app-shell-brand">
+          <div className="app-shell-title">Chess DB</div>
+          <div className="app-shell-user" data-testid="user-email">
             {props.userEmail}
           </div>
           <div className="button-row">
@@ -103,11 +112,11 @@ export function AppShell(props: {
         </div>
 
         {sections.map((section) => (
-          <div key={section.section} style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>
+          <div key={section.section} className="app-shell-nav-section">
+            <div className="app-shell-nav-label">
               {section.section}
             </div>
-            <div style={{ display: "grid", gap: 6 }}>
+            <div className="app-shell-nav-items">
               {section.items.map((item) => {
                 const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
                 return (
@@ -115,14 +124,7 @@ export function AppShell(props: {
                     key={item.href}
                     href={item.href}
                     onClick={() => setNavOpen(false)}
-                    style={{
-                      textDecoration: "none",
-                      color: "var(--text)",
-                      border: "1px solid var(--line)",
-                      borderRadius: 10,
-                      padding: "8px 10px",
-                      background: active ? "rgba(47,111,79,0.12)" : "rgba(255,255,255,0.8)",
-                    }}
+                    className={`app-shell-nav-link ${active ? "active" : ""}`}
                   >
                     {item.label}
                   </Link>
@@ -134,11 +136,11 @@ export function AppShell(props: {
       </aside>
       <div className="app-shell-content">
         <header className="app-shell-top">
-          <button type="button" onClick={() => setNavOpen((v) => !v)}>
+          <button type="button" onClick={() => setNavOpen((v) => !v)} aria-expanded={navOpen} aria-controls="app-nav">
             Menu
           </button>
-          <div style={{ fontWeight: 700 }}>Chess DB</div>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>{props.userEmail}</div>
+          <div className="app-shell-title">Chess DB</div>
+          <div className="app-shell-user">{props.userEmail}</div>
         </header>
         {props.children}
       </div>

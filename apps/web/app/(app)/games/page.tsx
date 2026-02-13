@@ -68,6 +68,14 @@ export default function GamesPage() {
     }
   }, []);
 
+  useEffect(() => {
+    setPage(1);
+  }, [sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen]);
+
+  useEffect(() => {
+    clearSelection();
+  }, [sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen]);
+
   const query = useMemo(() => {
     const params = new URLSearchParams();
     params.set("page", String(page));
@@ -345,7 +353,6 @@ export default function GamesPage() {
             Insert sample game
           </button>
           <Link href="/import">Import PGN</Link>
-          <Link href="/diagnostics">Diagnostics (legacy)</Link>
         </div>
       </section>
 
@@ -432,20 +439,14 @@ export default function GamesPage() {
             Position FEN
             <input value={positionFen} onChange={(event) => setPositionFen(event.target.value)} placeholder="startpos or FEN" />
           </label>
-          <div className="button-row" style={{ alignSelf: "end" }}>
-            <button
-              type="button"
-              onClick={() => {
-                setPage(1);
-                clearSelection();
-              }}
-            >
-              Apply
+          <div className="button-row button-row-end">
+            <button type="button" onClick={() => clearFilters()}>
+              Clear filters
             </button>
           </div>
         </div>
 
-        <div className="button-row" style={{ marginBottom: 10 }}>
+        <div className="button-row button-row-spaced">
           <span className="muted">Selected: {selected.length}</span>
           <button type="button" onClick={() => void exportSelected()} disabled={selected.length === 0}>
             Export selected
@@ -537,7 +538,7 @@ export default function GamesPage() {
             </p>
 
             {games.data.total === 0 ? (
-              <section className="card" style={{ borderStyle: "dashed" }}>
+              <section className="card card-dashed">
                 <h3>No games yet</h3>
                 <p className="muted">
                   Your account starts empty. Games are populated by importing PGNs (recommended) or by inserting a sample game.
@@ -557,7 +558,7 @@ export default function GamesPage() {
                     Clear filters
                   </button>
                 </div>
-                <p className="muted" style={{ fontSize: 12 }}>
+                <p className="muted-small">
                   After an import completes, refresh this page to see the games.
                 </p>
               </section>
@@ -618,7 +619,7 @@ export default function GamesPage() {
                 </tbody>
               </table>
             </div>
-            <div className="button-row" style={{ marginTop: 10 }}>
+            <div className="button-row button-row-top">
               <button type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={page <= 1}>
                 Previous
               </button>

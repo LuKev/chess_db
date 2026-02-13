@@ -23,6 +23,7 @@ export default function LoginPage() {
   const [resetEmail, setResetEmail] = useState("");
   const [resetToken, setResetToken] = useState("");
   const [resetNewPassword, setResetNewPassword] = useState("");
+  const [resetRequested, setResetRequested] = useState(false);
   const [resetStatus, setResetStatus] = useState("Use password reset if you lose access to your password");
 
   useEffect(() => {
@@ -119,11 +120,13 @@ export default function LoginPage() {
 
     if ("resetToken" in response.data && typeof response.data.resetToken === "string") {
       setResetToken(response.data.resetToken);
+      setResetRequested(true);
       setResetStatus("Reset token generated (non-production mode)");
       toasts.pushToast({ kind: "success", message: "Reset token generated" });
       return;
     }
 
+    setResetRequested(true);
     setResetStatus("If that email exists, a reset message has been sent");
     toasts.pushToast({ kind: "info", message: "If that email exists, a reset message was sent" });
   }
@@ -191,7 +194,7 @@ export default function LoginPage() {
               required
             />
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label className="checkbox-label">
             <input
               type="checkbox"
               checked={seedOnRegister}
@@ -210,50 +213,66 @@ export default function LoginPage() {
           </div>
         </form>
         <p className="muted" data-testid="auth-status">{status || "Not signed in"}</p>
-        <p className="muted" style={{ fontSize: 12 }} data-testid="auth-next">
+        <p className="app-shell-user" data-testid="auth-next">
           Next: {next}
         </p>
       </section>
 
       <section className="card">
         <h2>Password Reset</h2>
-        <div className="auth-grid">
-          <label>
-            Password Reset Email
-            <input
-              type="email"
-              value={resetEmail}
-              onChange={(event) => setResetEmail(event.target.value)}
-              placeholder="you@example.com"
-              data-testid="reset-email"
-            />
-          </label>
-          <label>
-            Reset Token
-            <input
-              value={resetToken}
-              onChange={(event) => setResetToken(event.target.value)}
-              placeholder="Paste token from email"
-              data-testid="reset-token"
-            />
-          </label>
-          <label>
-            New Password
-            <input
-              type="password"
-              value={resetNewPassword}
-              onChange={(event) => setResetNewPassword(event.target.value)}
-              minLength={8}
-              data-testid="reset-new-password"
-            />
-          </label>
-          <div className="button-row">
-            <button type="button" onClick={() => void requestPasswordReset()} data-testid="reset-request">
-              Request Reset
-            </button>
-            <button type="button" onClick={() => void confirmPasswordReset()} data-testid="reset-confirm">
-              Confirm Reset
-            </button>
+        <div className="subsection">
+          <p className="muted-small">Step 1: request a reset token using your account email.</p>
+          <div className="auth-grid">
+            <label>
+              Password Reset Email
+              <input
+                type="email"
+                value={resetEmail}
+                onChange={(event) => setResetEmail(event.target.value)}
+                placeholder="you@example.com"
+                data-testid="reset-email"
+              />
+            </label>
+            <div className="button-row button-row-end">
+              <button type="button" onClick={() => void requestPasswordReset()} data-testid="reset-request">
+                Request token
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="subsection">
+          <p className="muted-small">Step 2: paste the token and choose a new password.</p>
+          <div className="auth-grid">
+            <label>
+              Reset Token
+              <input
+                value={resetToken}
+                onChange={(event) => setResetToken(event.target.value)}
+                placeholder="Paste token from email"
+                data-testid="reset-token"
+              />
+            </label>
+            <label>
+              New Password
+              <input
+                type="password"
+                value={resetNewPassword}
+                onChange={(event) => setResetNewPassword(event.target.value)}
+                minLength={8}
+                data-testid="reset-new-password"
+              />
+            </label>
+            <div className="button-row button-row-end">
+              <button
+                type="button"
+                onClick={() => void confirmPasswordReset()}
+                data-testid="reset-confirm"
+                disabled={!resetRequested && !resetToken.trim()}
+              >
+                Set new password
+              </button>
+            </div>
           </div>
         </div>
         <p className="muted" data-testid="reset-status">{resetStatus}</p>
