@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AppShell } from "../../components/AppShell";
 import { useSessionQuery } from "../../features/auth/useSessionQuery";
-import { stripBasePath } from "../../lib/basePath";
+import { stripAppBasePath } from "../../lib/basePath";
 
 export default function AppLayout(props: { children: React.ReactNode }) {
   const router = useRouter();
@@ -15,7 +15,7 @@ export default function AppLayout(props: { children: React.ReactNode }) {
     if (!session.isLoading && session.data?.user === null) {
       const nextUrl =
         typeof window !== "undefined"
-          ? `${stripBasePath(window.location.pathname)}${window.location.search ?? ""}`
+          ? `${stripAppBasePath(window.location.pathname)}${window.location.search ?? ""}`
           : pathname;
       router.replace(`/login?next=${encodeURIComponent(nextUrl)}`);
     }

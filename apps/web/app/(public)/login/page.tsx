@@ -6,7 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../../../lib/api";
 import { useToasts } from "../../../components/ToastsProvider";
 import { useSessionQuery } from "../../../features/auth/useSessionQuery";
-import { stripBasePath } from "../../../lib/basePath";
+import { stripAppBasePath } from "../../../lib/basePath";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -35,7 +35,7 @@ export default function LoginPage() {
       if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
         return;
       }
-      setNext(stripBasePath(trimmed.startsWith("/") ? trimmed : `/${trimmed}`));
+      setNext(stripAppBasePath(trimmed.startsWith("/") ? trimmed : `/${trimmed}`));
     }
   }, []);
 
@@ -179,6 +179,9 @@ export default function LoginPage() {
           </div>
         </form>
         <p className="muted" data-testid="auth-status">{status || "Not signed in"}</p>
+        <p className="muted" style={{ fontSize: 12 }} data-testid="auth-next">
+          Next: {next}
+        </p>
       </section>
 
       <section className="card">
