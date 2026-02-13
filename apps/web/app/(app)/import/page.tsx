@@ -32,9 +32,26 @@ type ImportListResponse = {
   items: ImportJob[];
 };
 
+type ImportErrorItem = {
+  id: number;
+  lineNumber: number | null;
+  gameOffset: number | null;
+  message: string;
+  createdAt: string;
+};
+
+type ImportErrorListResponse = {
+  importJobId: number;
+  page: number;
+  pageSize: number;
+  total: number;
+  items: ImportErrorItem[];
+};
+
 export default function ImportPage() {
   const [strictDuplicate, setStrictDuplicate] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [selectedImportId, setSelectedImportId] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const toasts = useToasts();
 
@@ -51,6 +68,27 @@ export default function ImportPage() {
         "error" in response.data && response.data.error
           ? response.data.error
           : `Failed to load imports (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
+  const importErrors = useQuery({
+    queryKey: ["import-errors", { importJobId: selectedImportId }],
+    enabled: selectedImportId !== null,
+    queryFn: async (): Promise<ImportErrorListResponse> => {
+      const response = await fetchJson<ImportErrorListResponse>(
+        `/api/imports/${selectedImportId}/errors?page=1&pageSize=25`,
+        {
+          method: "GET",
+        }
+      );
+      if (response.status === 200 && "items" in response.data) {
+        return response.data;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load import errors (status ${response.status})`;
       throw new Error(msg);
     },
   });
@@ -159,7 +197,7 @@ export default function ImportPage() {
         {imports.isError ? <p className="muted">Error: {String(imports.error)}</p> : null}
         {imports.data ? (
           <div className="table-wrap">
-            <table style={{ minWidth: 700 }}>
+            <table style={{ minWidth: 900 }}>
               <thead>
                 <tr>
                   <th>ID</th>
@@ -170,6 +208,7 @@ export default function ImportPage() {
                   <th>Errors</th>
                   <th>Strict</th>
                   <th>Updated</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -183,11 +222,20 @@ export default function ImportPage() {
                     <td>{job.totals.parseErrors}</td>
                     <td>{job.strictDuplicateMode ? "yes" : "no"}</td>
                     <td>{new Date(job.updatedAt).toLocaleString()}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedImportId(job.id)}
+                        disabled={job.totals.parseErrors === 0}
+                      >
+                        View errors
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {imports.data.items.length === 0 ? (
                   <tr>
-                    <td colSpan={8}>No imports yet.</td>
+                    <td colSpan={9}>No imports yet.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -195,7 +243,71 @@ export default function ImportPage() {
           </div>
         ) : null}
       </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Import Errors</h2>
+          <div className="button-row">
+            <button
+              type="button"
+              onClick={() => setSelectedImportId(null)}
+              disabled={selectedImportId === null}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => void importErrors.refetch()}
+              disabled={selectedImportId === null || importErrors.isFetching}
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {selectedImportId === null ? (
+          <p className="muted">Select an import job with parse errors.</p>
+        ) : null}
+        {importErrors.isLoading ? <p className="muted">Loading errors...</p> : null}
+        {importErrors.isError ? <p className="muted">Error: {String(importErrors.error)}</p> : null}
+        {importErrors.data ? (
+          <>
+            <p className="muted">
+              Import #{importErrors.data.importJobId}: showing {importErrors.data.items.length} of{" "}
+              {importErrors.data.total}
+            </p>
+            <div className="table-wrap">
+              <table style={{ minWidth: 900 }}>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Line</th>
+                    <th>Game offset</th>
+                    <th>Message</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importErrors.data.items.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.id}</td>
+                      <td>{item.lineNumber ?? "-"}</td>
+                      <td>{item.gameOffset ?? "-"}</td>
+                      <td style={{ maxWidth: 540 }}>{item.message}</td>
+                      <td>{new Date(item.createdAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {importErrors.data.items.length === 0 ? (
+                    <tr>
+                      <td colSpan={5}>No errors for this import.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : null}
+      </section>
     </main>
   );
 }
-
