@@ -55,6 +55,12 @@ export type OpeningBackfillQueue = {
   close(): Promise<void>;
 };
 
+const IMPORT_JOB_NAME = "import" as const;
+const ANALYSIS_JOB_NAME = "analyze" as const;
+const EXPORT_JOB_NAME = "export" as const;
+const POSITION_BACKFILL_JOB_NAME = "position-backfill" as const;
+const OPENING_BACKFILL_JOB_NAME = "opening-backfill" as const;
+
 function bullmqConnection(config: AppConfig) {
   // Avoid passing ioredis instances into BullMQ. In some deployment layouts (e.g. isolated installs),
   // BullMQ can end up with a different ioredis type than the app, which breaks TypeScript builds.
@@ -72,7 +78,7 @@ export function createImportQueue(config: AppConfig): ImportQueue {
 
   return {
     async enqueueImport(payload: ImportJobPayload): Promise<void> {
-      await queue.add("import", payload, {
+      await queue.add(IMPORT_JOB_NAME, payload, {
         jobId: `import-${payload.importJobId}`,
         attempts: config.queueJobAttempts,
         backoff: {
@@ -96,7 +102,7 @@ export function createAnalysisQueue(config: AppConfig): AnalysisQueue {
 
   return {
     async enqueueAnalysis(payload: AnalysisJobPayload): Promise<void> {
-      await queue.add("analyze", payload, {
+      await queue.add(ANALYSIS_JOB_NAME, payload, {
         jobId: `analysis-${payload.analysisRequestId}`,
         attempts: config.queueJobAttempts,
         backoff: {
@@ -120,7 +126,7 @@ export function createExportQueue(config: AppConfig): ExportQueue {
 
   return {
     async enqueueExport(payload: ExportJobPayload): Promise<void> {
-      await queue.add("export", payload, {
+      await queue.add(EXPORT_JOB_NAME, payload, {
         jobId: `export-${payload.exportJobId}`,
         attempts: config.queueJobAttempts,
         backoff: {
@@ -144,7 +150,7 @@ export function createPositionBackfillQueue(config: AppConfig): PositionBackfill
 
   return {
     async enqueuePositionBackfill(payload: PositionBackfillPayload): Promise<void> {
-      await queue.add("position-backfill", payload, {
+      await queue.add(POSITION_BACKFILL_JOB_NAME, payload, {
         jobId: `position-backfill-${payload.userId}`,
         removeOnComplete: 50,
         removeOnFail: 50,
@@ -163,7 +169,7 @@ export function createOpeningBackfillQueue(config: AppConfig): OpeningBackfillQu
 
   return {
     async enqueueOpeningBackfill(payload: OpeningBackfillPayload): Promise<void> {
-      await queue.add("opening-backfill", payload, {
+      await queue.add(OPENING_BACKFILL_JOB_NAME, payload, {
         jobId: `opening-backfill-${payload.userId}`,
         removeOnComplete: 50,
         removeOnFail: 50,
