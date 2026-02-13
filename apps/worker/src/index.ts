@@ -5,7 +5,7 @@ import { createPool } from "./db.js";
 import {
   ANALYSIS_QUEUE_NAME,
   type AnalysisJobPayload,
-  createRedisConnection,
+  createBullmqConnection,
   EXPORT_QUEUE_NAME,
   type ExportJobPayload,
   IMPORT_QUEUE_NAME,
@@ -64,31 +64,22 @@ const metricsServer = startWorkerMetricsServer({
   },
 });
 
-const importRedisConnection = createRedisConnection(config.redisUrl);
-const analysisRedisConnection = createRedisConnection(config.redisUrl);
-const exportRedisConnection = createRedisConnection(config.redisUrl);
-const positionBackfillRedisConnection = createRedisConnection(config.redisUrl);
-const openingBackfillRedisConnection = createRedisConnection(config.redisUrl);
-const importStatsConnection = createRedisConnection(config.redisUrl);
-const analysisStatsConnection = createRedisConnection(config.redisUrl);
-const exportStatsConnection = createRedisConnection(config.redisUrl);
-const positionBackfillStatsConnection = createRedisConnection(config.redisUrl);
-const openingBackfillStatsConnection = createRedisConnection(config.redisUrl);
+const bullmqConnection = createBullmqConnection(config.redisUrl);
 
 const importQueueStats = new Queue(IMPORT_QUEUE_NAME, {
-  connection: importStatsConnection,
+  connection: bullmqConnection,
 });
 const analysisQueueStats = new Queue(ANALYSIS_QUEUE_NAME, {
-  connection: analysisStatsConnection,
+  connection: bullmqConnection,
 });
 const exportQueueStats = new Queue(EXPORT_QUEUE_NAME, {
-  connection: exportStatsConnection,
+  connection: bullmqConnection,
 });
 const positionBackfillQueueStats = new Queue(POSITION_BACKFILL_QUEUE_NAME, {
-  connection: positionBackfillStatsConnection,
+  connection: bullmqConnection,
 });
 const openingBackfillQueueStats = new Queue(OPENING_BACKFILL_QUEUE_NAME, {
-  connection: openingBackfillStatsConnection,
+  connection: bullmqConnection,
 });
 
 console.log(
@@ -184,7 +175,7 @@ const importWorker = new Worker<ImportJobPayload>(
     });
   },
   {
-    connection: importRedisConnection,
+    connection: bullmqConnection,
     concurrency: config.workerConcurrency,
   }
 );
@@ -203,7 +194,7 @@ const analysisWorker = new Worker<AnalysisJobPayload>(
     });
   },
   {
-    connection: analysisRedisConnection,
+    connection: bullmqConnection,
     concurrency: Math.max(1, Math.floor(config.workerConcurrency / 2)),
   }
 );
@@ -221,7 +212,7 @@ const exportWorker = new Worker<ExportJobPayload>(
     });
   },
   {
-    connection: exportRedisConnection,
+    connection: bullmqConnection,
     concurrency: Math.max(1, Math.floor(config.workerConcurrency / 2)),
   }
 );
@@ -237,7 +228,7 @@ const positionBackfillWorker = new Worker<PositionBackfillPayload>(
     });
   },
   {
-    connection: positionBackfillRedisConnection,
+    connection: bullmqConnection,
     concurrency: 1,
   }
 );
@@ -253,7 +244,7 @@ const openingBackfillWorker = new Worker<OpeningBackfillPayload>(
     });
   },
   {
-    connection: openingBackfillRedisConnection,
+    connection: bullmqConnection,
     concurrency: 1,
   }
 );
@@ -397,16 +388,6 @@ async function shutdown(signal: string): Promise<void> {
   await positionBackfillQueueStats.close();
   await openingBackfillQueueStats.close();
 
-  await importRedisConnection.quit();
-  await analysisRedisConnection.quit();
-  await exportRedisConnection.quit();
-  await positionBackfillRedisConnection.quit();
-  await openingBackfillRedisConnection.quit();
-  await importStatsConnection.quit();
-  await analysisStatsConnection.quit();
-  await exportStatsConnection.quit();
-  await positionBackfillStatsConnection.quit();
-  await openingBackfillStatsConnection.quit();
   await storage.close();
   await pool.end();
 

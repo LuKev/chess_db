@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import { Readable } from "node:stream";
 import type { Pool } from "pg";
+import { Decompress } from "fzstd";
 import { requireUser } from "../auth.js";
 import type { AppConfig } from "../config.js";
 import { parseIdempotencyKey } from "../http/idempotency.js";
@@ -78,6 +79,115 @@ const SamplePgnSeed = [
   ``,
 ].join("\\n");
 
+function toUint8Array(chunk: unknown): Uint8Array {
+  if (chunk instanceof Uint8Array) {
+    return chunk;
+  }
+  if (typeof chunk === "string") {
+    return new TextEncoder().encode(chunk);
+  }
+  if (chunk instanceof ArrayBuffer) {
+    return new Uint8Array(chunk);
+  }
+
+  return new Uint8Array(chunk as Buffer);
+}
+
+async function* decodeByteStream(
+  source: AsyncIterable<unknown>,
+  isZstd: boolean
+): AsyncGenerator<Uint8Array> {
+  if (!isZstd) {
+    for await (const chunk of source) {
+      yield toUint8Array(chunk);
+    }
+    return;
+  }
+
+  const outputChunks: Uint8Array[] = [];
+  const decompressor = new Decompress((chunk) => {
+    outputChunks.push(chunk);
+  });
+
+  for await (const chunk of source) {
+    decompressor.push(toUint8Array(chunk));
+    while (outputChunks.length > 0) {
+      const next = outputChunks.shift();
+      if (next) {
+        yield next;
+      }
+    }
+  }
+
+  decompressor.push(new Uint8Array(0), true);
+  while (outputChunks.length > 0) {
+    const next = outputChunks.shift();
+    if (next) {
+      yield next;
+    }
+  }
+}
+
+async function* iterateLinesFromStream(
+  source: AsyncIterable<unknown>,
+  isZstd: boolean
+): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
+  let carry = "";
+
+  for await (const bytes of decodeByteStream(source, isZstd)) {
+    carry += decoder.decode(bytes, { stream: true });
+
+    let newlineIndex = carry.indexOf("\n");
+    while (newlineIndex !== -1) {
+      const line = carry.slice(0, newlineIndex).replace(/\\r$/, "");
+      yield line;
+      carry = carry.slice(newlineIndex + 1);
+      newlineIndex = carry.indexOf("\n");
+    }
+  }
+
+  carry += decoder.decode();
+  if (carry.length > 0) {
+    yield carry.replace(/\\r$/, "");
+  }
+}
+
+async function* iteratePgnGames(
+  lines: AsyncIterable<string>
+): AsyncGenerator<{ gameOffset: number; pgnText: string }> {
+  let currentLines: string[] = [];
+  let hasMoves = false;
+  let gameOffset = 0;
+
+  for await (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("[") && hasMoves && currentLines.length > 0) {
+      const pgnText = currentLines.join("\n").trim();
+      if (pgnText.length > 0) {
+        gameOffset += 1;
+        yield { gameOffset, pgnText };
+      }
+      currentLines = [line];
+      hasMoves = false;
+      continue;
+    }
+
+    if (trimmed.length > 0 && !trimmed.startsWith("[")) {
+      hasMoves = true;
+    }
+
+    currentLines.push(line);
+  }
+
+  const pgnText = currentLines.join("\n").trim();
+  if (pgnText.length > 0) {
+    gameOffset += 1;
+    yield { gameOffset, pgnText };
+  }
+}
+
 async function resolveLatestLichessBroadcastUrl(): Promise<string> {
   const response = await fetch("https://database.lichess.org/broadcast/list.txt", {
     method: "GET",
@@ -97,6 +207,62 @@ async function resolveLatestLichessBroadcastUrl(): Promise<string> {
     throw new Error(`Unexpected broadcast list entry: ${first}`);
   }
   return first;
+}
+
+async function fetchStarterSeedPgn(params: {
+  url: string;
+  maxGames: number;
+  maxChars?: number;
+}): Promise<{ pgnText: string; gameCount: number }> {
+  const maxChars = params.maxChars ?? 50_000_000;
+  const controller = new AbortController();
+
+  const response = await fetch(params.url, {
+    method: "GET",
+    signal: controller.signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Failed to fetch starter seed (status ${response.status})`);
+  }
+
+  // Convert the Web stream to a Node async-iterable stream of chunks.
+  const nodeStream = Readable.fromWeb(
+    response.body as unknown as import("node:stream/web").ReadableStream
+  );
+
+  const games: string[] = [];
+  let totalChars = 0;
+
+  try {
+    const lines = iterateLinesFromStream(nodeStream, true);
+    for await (const { pgnText } of iteratePgnGames(lines)) {
+      const trimmed = pgnText.trim();
+      if (trimmed.length === 0) {
+        continue;
+      }
+      games.push(trimmed);
+      totalChars += trimmed.length;
+      if (totalChars > maxChars) {
+        controller.abort();
+        (nodeStream as unknown as { destroy?: () => void }).destroy?.();
+        throw new Error("Starter seed exceeded size limit while extracting games");
+      }
+      if (games.length >= params.maxGames) {
+        controller.abort();
+        (nodeStream as unknown as { destroy?: () => void }).destroy?.();
+        break;
+      }
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      throw error;
+    }
+  }
+
+  return {
+    pgnText: `${games.join("\n\n")}\n`,
+    gameCount: games.length,
+  };
 }
 
 function hasAllowedExtension(fileName: string): boolean {
@@ -196,7 +362,8 @@ export async function registerImportRoutes(
     }
 
     const urlPath = new URL(starterUrl).pathname;
-    const fileName = urlPath.split("/").pop() ?? "starter.pgn.zst";
+    const upstreamFileName = urlPath.split("/").pop() ?? "starter.pgn.zst";
+    const fileName = upstreamFileName.replace(/\\.pgn\\.zst$/i, ".pgn");
 
     const createJobResult = await pool.query<{ id: number | string }>(
       `INSERT INTO import_jobs (user_id, status, strict_duplicate_mode, max_games)
@@ -212,18 +379,20 @@ export async function registerImportRoutes(
     });
 
     try {
-      const remote = await fetch(starterUrl, { method: "GET" });
-      if (!remote.ok || !remote.body) {
+      const extracted = await fetchStarterSeedPgn({
+        url: starterUrl,
+        maxGames: parsed.data.maxGames,
+      });
+      if (extracted.gameCount <= 0) {
         return reply.status(502).send({
-          error: `Failed to download starter seed from upstream (status ${remote.status})`,
+          error: "Starter seed upstream returned no parseable games",
         });
       }
 
       await storage.uploadObject({
         key: objectKey,
-        // Node's fetch/undici stream types don't always align with Readable.fromWeb typings.
-        body: Readable.fromWeb(remote.body as unknown as import("node:stream/web").ReadableStream),
-        contentType: "application/zstd",
+        body: Readable.from([extracted.pgnText]),
+        contentType: "application/x-chess-pgn",
       });
 
       await pool.query(
@@ -243,7 +412,7 @@ export async function registerImportRoutes(
         status: "queued",
         objectKey,
         starter: true,
-        maxGames: parsed.data.maxGames,
+        maxGames: extracted.gameCount,
         upstream: "lichess_broadcast",
       });
     } catch (error) {

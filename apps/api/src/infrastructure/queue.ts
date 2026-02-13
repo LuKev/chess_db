@@ -1,5 +1,4 @@
 import { Queue } from "bullmq";
-import { Redis } from "ioredis";
 import type { AppConfig } from "../config.js";
 
 export const IMPORT_QUEUE_NAME = "imports";
@@ -56,13 +55,20 @@ export type OpeningBackfillQueue = {
   close(): Promise<void>;
 };
 
-export function createImportQueue(config: AppConfig): ImportQueue {
-  const connection = new Redis(config.redisUrl, {
+function bullmqConnection(config: AppConfig) {
+  // Avoid passing ioredis instances into BullMQ. In some deployment layouts (e.g. isolated installs),
+  // BullMQ can end up with a different ioredis type than the app, which breaks TypeScript builds.
+  return {
+    url: config.redisUrl,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
-  });
+  };
+}
 
-  const queue = new Queue<ImportJobPayload>(IMPORT_QUEUE_NAME, { connection });
+export function createImportQueue(config: AppConfig): ImportQueue {
+  const queue = new Queue<ImportJobPayload>(IMPORT_QUEUE_NAME, {
+    connection: bullmqConnection(config),
+  });
 
   return {
     async enqueueImport(payload: ImportJobPayload): Promise<void> {
@@ -79,18 +85,14 @@ export function createImportQueue(config: AppConfig): ImportQueue {
     },
     async close(): Promise<void> {
       await queue.close();
-      await connection.quit();
     },
   };
 }
 
 export function createAnalysisQueue(config: AppConfig): AnalysisQueue {
-  const connection = new Redis(config.redisUrl, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
+  const queue = new Queue<AnalysisJobPayload>(ANALYSIS_QUEUE_NAME, {
+    connection: bullmqConnection(config),
   });
-
-  const queue = new Queue<AnalysisJobPayload>(ANALYSIS_QUEUE_NAME, { connection });
 
   return {
     async enqueueAnalysis(payload: AnalysisJobPayload): Promise<void> {
@@ -107,18 +109,14 @@ export function createAnalysisQueue(config: AppConfig): AnalysisQueue {
     },
     async close(): Promise<void> {
       await queue.close();
-      await connection.quit();
     },
   };
 }
 
 export function createExportQueue(config: AppConfig): ExportQueue {
-  const connection = new Redis(config.redisUrl, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
+  const queue = new Queue<ExportJobPayload>(EXPORT_QUEUE_NAME, {
+    connection: bullmqConnection(config),
   });
-
-  const queue = new Queue<ExportJobPayload>(EXPORT_QUEUE_NAME, { connection });
 
   return {
     async enqueueExport(payload: ExportJobPayload): Promise<void> {
@@ -135,19 +133,13 @@ export function createExportQueue(config: AppConfig): ExportQueue {
     },
     async close(): Promise<void> {
       await queue.close();
-      await connection.quit();
     },
   };
 }
 
 export function createPositionBackfillQueue(config: AppConfig): PositionBackfillQueue {
-  const connection = new Redis(config.redisUrl, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-  });
-
   const queue = new Queue<PositionBackfillPayload>(POSITION_BACKFILL_QUEUE_NAME, {
-    connection,
+    connection: bullmqConnection(config),
   });
 
   return {
@@ -160,19 +152,13 @@ export function createPositionBackfillQueue(config: AppConfig): PositionBackfill
     },
     async close(): Promise<void> {
       await queue.close();
-      await connection.quit();
     },
   };
 }
 
 export function createOpeningBackfillQueue(config: AppConfig): OpeningBackfillQueue {
-  const connection = new Redis(config.redisUrl, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-  });
-
   const queue = new Queue<OpeningBackfillPayload>(OPENING_BACKFILL_QUEUE_NAME, {
-    connection,
+    connection: bullmqConnection(config),
   });
 
   return {
@@ -185,7 +171,6 @@ export function createOpeningBackfillQueue(config: AppConfig): OpeningBackfillQu
     },
     async close(): Promise<void> {
       await queue.close();
-      await connection.quit();
     },
   };
 }

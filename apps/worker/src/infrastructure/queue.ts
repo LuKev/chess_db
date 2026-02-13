@@ -1,5 +1,3 @@
-import { Redis } from "ioredis";
-
 export const IMPORT_QUEUE_NAME = "imports";
 export const ANALYSIS_QUEUE_NAME = "analysis";
 export const EXPORT_QUEUE_NAME = "exports";
@@ -29,9 +27,12 @@ export type OpeningBackfillPayload = {
   userId: number;
 };
 
-export function createRedisConnection(redisUrl: string): Redis {
-  return new Redis(redisUrl, {
+export function createBullmqConnection(redisUrl: string) {
+  // Avoid passing ioredis instances into BullMQ. In some deployment layouts (e.g. isolated installs),
+  // BullMQ can end up with a different ioredis type than the app, which breaks TypeScript builds.
+  return {
+    url: redisUrl,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
-  });
+  };
 }
