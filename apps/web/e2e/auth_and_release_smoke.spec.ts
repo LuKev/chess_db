@@ -37,9 +37,7 @@ async function registerViaUi(params: {
   await params.page.getByTestId("auth-email").fill(params.email);
   await params.page.getByTestId("auth-password").fill(params.password);
   await params.page.getByTestId("auth-register").click();
-  await expect(params.page.getByTestId("user-email")).toContainText(params.email, {
-    timeout: 20_000,
-  });
+  await expect(params.page.getByTestId("user-email")).toContainText(params.email, { timeout: 20_000 });
 }
 
 async function loginViaUi(params: {
@@ -50,9 +48,7 @@ async function loginViaUi(params: {
   await params.page.getByTestId("auth-email").fill(params.email);
   await params.page.getByTestId("auth-password").fill(params.password);
   await params.page.getByTestId("auth-login").click();
-  await expect(params.page.getByTestId("user-email")).toContainText(params.email, {
-    timeout: 20_000,
-  });
+  await expect(params.page.getByTestId("user-email")).toContainText(params.email, { timeout: 20_000 });
 }
 
 test.describe("release-like browser coverage", () => {
@@ -67,7 +63,8 @@ test.describe("release-like browser coverage", () => {
     await expect(page.getByTestId("user-email")).toContainText(email);
 
     await page.getByTestId("auth-logout").click();
-    await expect(page.getByTestId("auth-status")).toContainText("Not signed in");
+    await page.waitForURL(/\/login(\?|$)/, { timeout: 20_000 });
+    await expect(page.getByTestId("auth-status")).toContainText("Not signed in", { timeout: 20_000 });
 
     await page.getByTestId("auth-email").fill(email);
     await page.getByTestId("auth-password").fill(password);
@@ -130,6 +127,10 @@ test.describe("release-like browser coverage", () => {
       },
     });
     expect(badOriginLogout.status()).toBe(403);
+
+    // Logout via the browser (valid origin), then exercise password reset UI.
+    await page.getByTestId("auth-logout").click();
+    await page.waitForURL(/\/login(\?|$)/, { timeout: 20_000 });
 
     await page.getByTestId("reset-email").fill(email);
     await page.getByTestId("reset-request").click();

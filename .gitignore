@@ -11,6 +11,10 @@ dist/
 build/
 coverage/
 *.tsbuildinfo
+playwright-report/
+test-results/
+apps/web/playwright-report/
+apps/web/test-results/
 
 # Env
 .env

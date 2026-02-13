@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { usePathname } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../lib/api";
@@ -43,6 +44,7 @@ export function AppShell(props: {
   userEmail: string;
   children: React.ReactNode;
 }) {
+  const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
   const toasts = useToasts();
@@ -59,8 +61,9 @@ export function AppShell(props: {
       });
       return;
     }
-    queryClient.invalidateQueries({ queryKey: ["session"] });
+    await queryClient.invalidateQueries({ queryKey: ["session"] });
     toasts.pushToast({ kind: "success", message: "Signed out" });
+    router.replace("/login");
   }
 
   const sections = groupNav(NAV);

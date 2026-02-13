@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../../../lib/api";
 import { useToasts } from "../../../components/ToastsProvider";
 import { useSessionQuery } from "../../../features/auth/useSessionQuery";
+import { stripBasePath } from "../../../lib/basePath";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -30,7 +31,11 @@ export default function LoginPage() {
     const parsed = new URLSearchParams(window.location.search);
     const nextParam = parsed.get("next");
     if (nextParam && nextParam.trim().length > 0) {
-      setNext(nextParam);
+      const trimmed = nextParam.trim();
+      if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+        return;
+      }
+      setNext(stripBasePath(trimmed.startsWith("/") ? trimmed : `/${trimmed}`));
     }
   }, []);
 
@@ -61,6 +66,7 @@ export default function LoginPage() {
     }
 
     await queryClient.invalidateQueries({ queryKey: ["session"] });
+    await queryClient.refetchQueries({ queryKey: ["session"] });
     toasts.pushToast({ kind: "success", message: mode === "login" ? "Signed in" : "Account created" });
     router.replace(next);
   }
