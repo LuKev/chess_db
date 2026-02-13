@@ -133,6 +133,22 @@ export default function GamesPage() {
     },
   });
 
+  async function queueSampleImport(): Promise<void> {
+    const response = await fetchJson<{ id: number }>("/api/imports/sample", { method: "POST" });
+    if (response.status !== 201) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to queue sample import (status ${response.status})`;
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    toasts.pushToast({
+      kind: "success",
+      message: `Queued sample import (#${"id" in response.data ? response.data.id : "?"}). See Import page for status.`,
+    });
+  }
+
   async function createSampleGame(): Promise<void> {
     const sampleHash = `sample-${Date.now()}`;
     const response = await fetchJson<{ id: number }>("/api/games", {
@@ -281,6 +297,21 @@ export default function GamesPage() {
       return;
     }
     toasts.pushToast({ kind: "success", message: "Export queued (see Exports page)" });
+    clearSelection();
+  }
+
+  function clearFilters(): void {
+    setSort("date_desc");
+    setPlayer("");
+    setEco("");
+    setOpeningPrefix("");
+    setResult("");
+    setFromDate("");
+    setToDate("");
+    setCollectionId("");
+    setTagId("");
+    setPositionFen("");
+    setPage(1);
     clearSelection();
   }
 
@@ -485,6 +516,31 @@ export default function GamesPage() {
             <p className="muted">
               {games.data.total} total, page {games.data.page}
             </p>
+
+            {games.data.total === 0 ? (
+              <section className="card" style={{ borderStyle: "dashed" }}>
+                <h3>No games yet</h3>
+                <p className="muted">
+                  Your account starts empty. Games are populated by importing PGNs (recommended) or by inserting a sample game.
+                </p>
+                <div className="button-row">
+                  <button type="button" onClick={() => void queueSampleImport()}>
+                    Queue sample import
+                  </button>
+                  <Link href="/import">Import PGN</Link>
+                  <button type="button" onClick={() => void createSampleGame()}>
+                    Insert sample game
+                  </button>
+                  <button type="button" onClick={() => clearFilters()}>
+                    Clear filters
+                  </button>
+                </div>
+                <p className="muted" style={{ fontSize: 12 }}>
+                  After an import completes, refresh this page to see the games.
+                </p>
+              </section>
+            ) : null}
+
             <div className="table-wrap">
               <table>
                 <thead>
