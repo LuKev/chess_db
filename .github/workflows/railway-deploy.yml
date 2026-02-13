@@ -39,21 +39,23 @@ jobs:
           node-version: "22"
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli@3.14.0
+        # Keep this aligned with local Railway CLI behavior. Older CLI versions
+        # have different flag names and auth behavior.
+        run: npm install -g @railway/cli@4.23.2
 
       - name: Deploy web
         run: |
-          railway link --project-id "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web
+          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web
           railway up --path-as-root apps/web --ci
 
       - name: Deploy api
         run: |
-          railway link --project-id "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service api
+          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service api
           railway up --path-as-root apps/api --ci
 
       - name: Deploy worker
         run: |
-          railway link --project-id "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker
+          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker
           railway up --path-as-root apps/worker --ci
 
       - name: Post-deploy smoke checks
