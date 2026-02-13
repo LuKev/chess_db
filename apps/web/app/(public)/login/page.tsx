@@ -17,6 +17,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [seedOnRegister, setSeedOnRegister] = useState(true);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
@@ -53,7 +54,6 @@ export default function LoginPage() {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-    setBusy(false);
 
     if (response.status >= 400) {
       const msg =
@@ -62,12 +62,34 @@ export default function LoginPage() {
           : `${mode} failed`;
       setStatus(msg);
       toasts.pushToast({ kind: "error", message: msg });
+      setBusy(false);
       return;
     }
 
     await queryClient.invalidateQueries({ queryKey: ["session"] });
     await queryClient.refetchQueries({ queryKey: ["session"] });
     toasts.pushToast({ kind: "success", message: mode === "login" ? "Signed in" : "Account created" });
+
+    if (mode === "register" && seedOnRegister) {
+      setStatus("Queuing starter games import (up to 1000 games)...");
+      const seedResponse = await fetchJson<{ id: number }>("/api/imports/starter", {
+        method: "POST",
+        body: JSON.stringify({ maxGames: 1000 }),
+      });
+      if (seedResponse.status >= 400) {
+        const msg =
+          "error" in seedResponse.data && seedResponse.data.error
+            ? seedResponse.data.error
+            : "Failed to queue starter seed";
+        toasts.pushToast({ kind: "error", message: msg });
+        setStatus(msg);
+      } else {
+        toasts.pushToast({ kind: "success", message: "Queued starter games import. See Import page for status." });
+        setStatus("Starter games import queued. You can track progress on the Import page.");
+      }
+    }
+
+    setBusy(false);
     router.replace(next);
   }
 
@@ -168,6 +190,15 @@ export default function LoginPage() {
               data-testid="auth-password"
               required
             />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={seedOnRegister}
+              onChange={(event) => setSeedOnRegister(event.target.checked)}
+              disabled={busy}
+            />
+            Seed starter games on register (1000)
           </label>
           <div className="button-row">
             <button type="button" onClick={() => void submit("register")} disabled={busy} data-testid="auth-register">
