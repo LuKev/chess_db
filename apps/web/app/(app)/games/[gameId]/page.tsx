@@ -4,8 +4,9 @@ import { Chess, type PieceSymbol } from "chess.js";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchJson, fetchText } from "../../../../lib/api";
+import { useToasts } from "../../../../components/ToastsProvider";
 
 type GameDetail = {
   id: number;
@@ -21,6 +22,35 @@ type GameDetail = {
   whiteElo: number | null;
   blackElo: number | null;
   pgn: string;
+};
+
+type AnnotationResponse = {
+  gameId: number;
+  schemaVersion: number;
+  annotations: Record<string, unknown>;
+  moveNotes: Record<string, unknown>;
+};
+
+type EngineLine = {
+  id: number;
+  ply: number;
+  fenNorm: string;
+  engine: string;
+  depth: number | null;
+  multipv: number | null;
+  pvUci: string[];
+  pvSan: string[];
+  evalCp: number | null;
+  evalMate: number | null;
+  nodes: number | null;
+  timeMs: number | null;
+  source: string;
+  createdAt: string;
+};
+
+type EngineLinesResponse = {
+  gameId: number;
+  items: EngineLine[];
 };
 
 type BoardSquare = {
@@ -67,6 +97,12 @@ export default function GameViewerPage() {
   const params = useParams<{ gameId: string }>();
   const gameId = Number(params.gameId);
   const [cursor, setCursor] = useState(0);
+  const queryClient = useQueryClient();
+  const toasts = useToasts();
+
+  const [rootComment, setRootComment] = useState("");
+  const [annotationStatus, setAnnotationStatus] = useState("Load annotations to start.");
+  const [annotationDirty, setAnnotationDirty] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -111,6 +147,50 @@ export default function GameViewerPage() {
     },
   });
 
+  const annotations = useQuery({
+    queryKey: ["annotations", { gameId }],
+    enabled: Number.isFinite(gameId) && gameId > 0,
+    queryFn: async (): Promise<AnnotationResponse> => {
+      const response = await fetchJson<AnnotationResponse>(`/api/games/${gameId}/annotations`, { method: "GET" });
+      if (response.status === 200 && "annotations" in response.data) {
+        return response.data;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load annotations (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
+  useEffect(() => {
+    if (!annotations.data || annotationDirty) {
+      return;
+    }
+    const existing = annotations.data.annotations;
+    const comment = typeof existing.comment === "string" ? existing.comment : "";
+    setRootComment(comment);
+    setAnnotationStatus("Annotations loaded.");
+  }, [annotations.data, annotationDirty]);
+
+  const engineLines = useQuery({
+    queryKey: ["engine-lines", { gameId, ply: cursor }],
+    enabled: Number.isFinite(gameId) && gameId > 0,
+    queryFn: async (): Promise<EngineLinesResponse> => {
+      const response = await fetchJson<EngineLinesResponse>(`/api/games/${gameId}/engine-lines?ply=${cursor}`, {
+        method: "GET",
+      });
+      if (response.status === 200 && "items" in response.data) {
+        return response.data;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load engine lines (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
   const derived = useMemo(() => {
     const startingFen = game.data?.startingFen ?? "startpos";
     const pgnText = pgn.data ?? "";
@@ -135,6 +215,40 @@ export default function GameViewerPage() {
       fen: fens[safeCursor] ?? "",
     };
   }, [cursor, game.data?.startingFen, pgn.data]);
+
+  async function saveAnnotations(): Promise<void> {
+    if (!annotations.data) {
+      return;
+    }
+    setAnnotationStatus("Saving...");
+    const response = await fetchJson<AnnotationResponse>(`/api/games/${gameId}/annotations`, {
+      method: "PUT",
+      body: JSON.stringify({
+        schemaVersion: Math.max(2, annotations.data.schemaVersion ?? 2),
+        annotations: {
+          ...(annotations.data.annotations ?? {}),
+          comment: rootComment,
+          cursor,
+        },
+        moveNotes: annotations.data.moveNotes ?? {},
+      }),
+    });
+
+    if (response.status !== 200 || !("annotations" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to save annotations (status ${response.status})`;
+      setAnnotationStatus(msg);
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+
+    setAnnotationDirty(false);
+    setAnnotationStatus(`Saved at ${new Date().toLocaleTimeString()}`);
+    toasts.pushToast({ kind: "success", message: "Annotations saved" });
+    await queryClient.invalidateQueries({ queryKey: ["annotations", { gameId }] });
+  }
 
   async function copyFen(): Promise<void> {
     if (!derived.fen) {
@@ -244,6 +358,96 @@ export default function GameViewerPage() {
             <pre className="pgn-pre">{pgn.data ?? game.data?.pgn ?? ""}</pre>
           </div>
         </div>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Annotations</h2>
+          <div className="button-row">
+            <button
+              type="button"
+              onClick={() => void saveAnnotations()}
+              disabled={!annotationDirty || annotations.isLoading || annotations.isError}
+            >
+              Save
+            </button>
+            <button type="button" onClick={() => void annotations.refetch()} disabled={annotations.isFetching}>
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {annotations.isLoading ? <p className="muted">Loading annotations...</p> : null}
+        {annotations.isError ? <p className="muted">Error: {String(annotations.error)}</p> : null}
+        <label>
+          Game notes
+          <textarea
+            rows={6}
+            value={rootComment}
+            onChange={(event) => {
+              setRootComment(event.target.value);
+              setAnnotationDirty(true);
+            }}
+            placeholder="Write comments about this game..."
+          />
+        </label>
+        <p className="muted">{annotationStatus}</p>
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Saved Engine Lines (This Ply)</h2>
+          <div className="button-row">
+            <button type="button" onClick={() => void engineLines.refetch()} disabled={engineLines.isFetching}>
+              Refresh
+            </button>
+          </div>
+        </div>
+        {engineLines.isLoading ? <p className="muted">Loading engine lines...</p> : null}
+        {engineLines.isError ? <p className="muted">Error: {String(engineLines.error)}</p> : null}
+        {engineLines.data ? (
+          <div className="table-wrap">
+            <table style={{ minWidth: 900 }}>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Engine</th>
+                  <th>Depth</th>
+                  <th>Eval</th>
+                  <th>PV (SAN)</th>
+                  <th>Source</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {engineLines.data.items.map((line) => (
+                  <tr key={line.id}>
+                    <td>{line.id}</td>
+                    <td>{line.engine}</td>
+                    <td>{line.depth ?? "-"}</td>
+                    <td>
+                      {line.evalMate !== null
+                        ? `#${line.evalMate}`
+                        : line.evalCp !== null
+                          ? `${(line.evalCp / 100).toFixed(2)}`
+                          : "-"}
+                    </td>
+                    <td style={{ maxWidth: 420 }}>
+                      {line.pvSan?.length ? line.pvSan.join(" ") : line.pvUci.join(" ")}
+                    </td>
+                    <td>{line.source}</td>
+                    <td>{new Date(line.createdAt).toLocaleString()}</td>
+                  </tr>
+                ))}
+                {engineLines.data.items.length === 0 ? (
+                  <tr>
+                    <td colSpan={7}>No saved lines at this ply.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </section>
     </main>
   );
