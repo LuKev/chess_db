@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 
 import pg from "pg";
+import {
+  registerAndLogin,
+  requestJson,
+  resolveApiBaseUrl,
+  resolveBenchCredentials,
+} from "./lib/api_client.mjs";
 
 const { Pool } = pg;
 
-const apiBaseUrl = process.env.API_BASE_URL ?? "http://localhost:4000";
+const apiBaseUrl = resolveApiBaseUrl();
 const databaseUrl = process.env.DATABASE_URL;
-const benchEmail =
-  process.env.BENCH_EMAIL ?? `bench-query-${Date.now()}@example.com`;
-const benchPassword = process.env.BENCH_PASSWORD ?? "benchPassword123!";
+const { email: benchEmail, password: benchPassword } = resolveBenchCredentials({
+  prefix: "bench-query",
+});
 const targetGames = Number(process.env.BENCH_QUERY_GAMES ?? "100000");
 const requestCount = Number(process.env.BENCH_QUERY_REQUESTS ?? "200");
 const p50TargetMs = Number(process.env.BENCH_P50_TARGET_MS ?? "120");
@@ -25,70 +31,20 @@ if (!Number.isInteger(requestCount) || requestCount <= 0) {
   throw new Error("BENCH_QUERY_REQUESTS must be a positive integer");
 }
 
-function parseJsonResponse(response, bodyText) {
-  try {
-    return bodyText ? JSON.parse(bodyText) : {};
-  } catch {
-    return {};
-  }
-}
-
-function getSessionCookie(response) {
-  const headers = response.headers;
-  const setCookie =
-    typeof headers.getSetCookie === "function"
-      ? headers.getSetCookie()[0]
-      : headers.get("set-cookie");
-
-  if (!setCookie) {
-    throw new Error("Missing Set-Cookie header");
-  }
-  return setCookie.split(";")[0];
-}
-
-async function requestJson(path, options = {}) {
-  const response = await fetch(`${apiBaseUrl}${path}`, options);
-  const text = await response.text();
-  return {
-    response,
-    body: parseJsonResponse(response, text),
-    text,
-  };
-}
+const requestJsonApi = (path, options = {}) =>
+  requestJson(apiBaseUrl, path, options);
 
 async function authenticate() {
-  const register = await requestJson("/api/auth/register", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      email: benchEmail,
-      password: benchPassword,
-    }),
+  const cookie = await registerAndLogin({
+    baseUrl: apiBaseUrl,
+    email: benchEmail,
+    password: benchPassword,
   });
 
-  if (![201, 409].includes(register.response.status)) {
-    throw new Error(
-      `Failed to register benchmark user: ${register.response.status} ${register.text}`
-    );
-  }
-
-  const login = await requestJson("/api/auth/login", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      email: benchEmail,
-      password: benchPassword,
-    }),
-  });
-
-  if (login.response.status !== 200) {
-    throw new Error(`Failed to login benchmark user: ${login.response.status} ${login.text}`);
-  }
-
-  const me = await requestJson("/api/auth/me", {
+  const me = await requestJsonApi("/api/auth/me", {
     method: "GET",
     headers: {
-      cookie: getSessionCookie(login.response),
+      cookie,
     },
   });
   if (me.response.status !== 200 || !me.body.user?.id) {
@@ -96,7 +52,7 @@ async function authenticate() {
   }
 
   return {
-    cookie: getSessionCookie(login.response),
+    cookie,
     userId: Number(me.body.user.id),
   };
 }

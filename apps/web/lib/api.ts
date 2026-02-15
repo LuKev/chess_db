@@ -1,21 +1,37 @@
 "use client";
 
+const LOCAL_API_BASE_URL = "http://localhost:4000";
+
+function isLocalhost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+function hostMatchesDomain(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
 export function apiBaseUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+  if (configured) {
+    return configured;
+  }
+
   if (typeof window !== "undefined") {
     const host = window.location.hostname.toLowerCase();
-    if (host.endsWith("kezilu.com")) {
-      return "https://api.kezilu.com";
+    const prodDomain =
+      process.env.NEXT_PUBLIC_PROD_DOMAIN?.trim().toLowerCase() || "kezilu.com";
+    if (hostMatchesDomain(host, prodDomain)) {
+      return (
+        process.env.NEXT_PUBLIC_PROD_API_ORIGIN?.trim() ||
+        `https://api.${prodDomain}`
+      );
     }
-    if (host === "localhost" || host === "127.0.0.1") {
-      return "http://localhost:4000";
+    if (isLocalhost(host)) {
+      return LOCAL_API_BASE_URL;
     }
   }
 
-  if (process.env.NEXT_PUBLIC_API_BASE_URL) {
-    return process.env.NEXT_PUBLIC_API_BASE_URL;
-  }
-
-  return "http://localhost:4000";
+  return LOCAL_API_BASE_URL;
 }
 
 export async function fetchJson<T>(
@@ -83,4 +99,3 @@ export async function fetchText(
     text: await response.text(),
   };
 }
-

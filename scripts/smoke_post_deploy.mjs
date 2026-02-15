@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { randomEmail, randomPassword, requestJson } from "./lib/api_client.mjs";
+
 const baseUrl = process.env.SMOKE_API_BASE_URL;
 if (!baseUrl) {
   throw new Error("Missing SMOKE_API_BASE_URL");
@@ -27,28 +29,7 @@ if ((smokeEmail && !smokePassword) || (!smokeEmail && smokePassword)) {
   throw new Error("Provide both SMOKE_EMAIL and SMOKE_PASSWORD (or neither).");
 }
 
-function randomEmail() {
-  return `smoke-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}@example.com`;
-}
-
-async function jsonRequest(path, init = {}) {
-  const hasJsonBody = init.body !== undefined && !(init.body instanceof FormData);
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      ...(hasJsonBody ? { "content-type": "application/json" } : {}),
-      ...(init.headers ?? {}),
-    },
-  });
-  const body = await response.text();
-  let data = {};
-  try {
-    data = JSON.parse(body);
-  } catch {
-    data = { raw: body };
-  }
-  return { response, data };
-}
+const requestJsonApi = (path, init = {}) => requestJson(baseUrl, path, init);
 
 async function main() {
   if (requiredApiOrigin) {
@@ -65,29 +46,29 @@ async function main() {
     throw new Error(`Health check failed: ${health.status}`);
   }
 
-  const email = smokeEmail ?? randomEmail();
-  const password = smokePassword ?? "SmokePassword123!";
+  const email = smokeEmail ?? randomEmail("smoke");
+  const password = smokePassword ?? randomPassword("smoke");
 
   let registerStatus = null;
   if (!smokeEmail) {
-    const register = await jsonRequest("/api/auth/register", {
+    const register = await requestJsonApi("/api/auth/register", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
     registerStatus = register.response.status;
     if (register.response.status !== 201) {
       throw new Error(
-        `Register failed: ${register.response.status} ${JSON.stringify(register.data)}`
+        `Register failed: ${register.response.status} ${JSON.stringify(register.body)}`
       );
     }
   }
 
-  const login = await jsonRequest("/api/auth/login", {
+  const login = await requestJsonApi("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
   if (login.response.status !== 200) {
-    throw new Error(`Login failed: ${login.response.status} ${JSON.stringify(login.data)}`);
+    throw new Error(`Login failed: ${login.response.status} ${JSON.stringify(login.body)}`);
   }
   const cookie = login.response.headers.get("set-cookie");
   if (!cookie) {
@@ -142,7 +123,7 @@ async function main() {
     throw new Error(`Import status failed: ${importStatus.status}`);
   }
 
-  const analysis = await jsonRequest("/api/analysis", {
+  const analysis = await requestJsonApi("/api/analysis", {
     method: "POST",
     headers: {
       cookie: sessionCookie,
@@ -155,14 +136,14 @@ async function main() {
   });
   if (analysis.response.status !== 201 && analysis.response.status !== 200) {
     throw new Error(
-      `Authenticated write failed: ${analysis.response.status} ${JSON.stringify(analysis.data)}`
+      `Authenticated write failed: ${analysis.response.status} ${JSON.stringify(analysis.body)}`
     );
   }
-  if (!analysis.data.id || !analysis.data.status) {
+  if (!analysis.body.id || !analysis.body.status) {
     throw new Error("Authenticated write response missing expected id/status contract");
   }
 
-  const logout = await jsonRequest("/api/auth/logout", {
+  const logout = await requestJsonApi("/api/auth/logout", {
     method: "POST",
     headers: {
       cookie: sessionCookie,
@@ -170,7 +151,7 @@ async function main() {
     },
   });
   if (logout.response.status !== 200) {
-    throw new Error(`Logout failed: ${logout.response.status} ${JSON.stringify(logout.data)}`);
+    throw new Error(`Logout failed: ${logout.response.status} ${JSON.stringify(logout.body)}`);
   }
 
   const meAfterLogout = await fetch(`${baseUrl}/api/auth/me`, {
