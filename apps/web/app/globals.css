@@ -311,8 +311,7 @@ button:disabled {
 .palette-item.active,
 .crumb-active,
 .line-list button.active,
-.notation-list button.active,
-.notation-row button.active {
+.notation-list button.active {
   border-color: #1b4d35;
   background: #1b4d35;
   color: #fff;
@@ -380,6 +379,29 @@ button:disabled {
 .notation-row button {
   width: 100%;
   text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.notation-row button:hover:not(:disabled) {
+  background: #f5f0e5;
+  border-color: #ede8dc;
+}
+
+.notation-row button.active {
+  background: #ede8dc;
+  border-color: #cfc7b3;
+  font-weight: 600;
+}
+
+.notation-row button:disabled {
+  opacity: 1;
+  cursor: default;
+  color: var(--muted);
 }
 
 .pgn-pre {

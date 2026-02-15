@@ -4,7 +4,8 @@ import { Chess, type PieceSymbol } from "chess.js";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchJson, fetchText } from "../lib/api";
+import { fetchJson } from "../lib/api";
+import { extractMainlineSans } from "../lib/chess/moveTree";
 
 type GameDetail = {
   id: number;
@@ -20,6 +21,7 @@ type GameDetail = {
   whiteElo: number | null;
   blackElo: number | null;
   pgn: string;
+  moveTree: Record<string, unknown>;
 };
 
 type BoardSquare = {
@@ -104,42 +106,20 @@ export function GameViewerPanel(props: { gameId: number; onClose?: () => void })
     },
   });
 
-  const pgn = useQuery({
-    queryKey: ["game-pgn", { gameId }],
-    enabled: Number.isFinite(gameId) && gameId > 0,
-    queryFn: async (): Promise<string> => {
-      const response = await fetchText(`/api/games/${gameId}/pgn`, { method: "GET" });
-      if (response.status === 200) {
-        return response.text;
-      }
-      return game.data?.pgn ?? "";
-    },
-  });
-
   const derived = useMemo(() => {
     const startingFen = game.data?.startingFen ?? "startpos";
-    const pgnText = pgn.data ?? "";
-
-    const chess = new Chess(startingFen && startingFen !== "startpos" ? startingFen : undefined);
-    let history: string[] = [];
-    try {
-      if (pgnText.trim().length > 0) {
-        chess.loadPgn(pgnText);
-        history = chess.history();
-      }
-    } catch {
-      history = [];
-    }
+    const moveSans = extractMainlineSans(game.data?.moveTree);
 
     const replay = new Chess(startingFen && startingFen !== "startpos" ? startingFen : undefined);
     const fens: string[] = [replay.fen()];
-    for (const move of history) {
-      try {
-        replay.move(move);
-        fens.push(replay.fen());
-      } catch {
+    const appliedSans: string[] = [];
+    for (const san of moveSans) {
+      const move = replay.move(san, { strict: false });
+      if (!move) {
         break;
       }
+      appliedSans.push(san);
+      fens.push(replay.fen());
     }
 
     const safeCursor = Math.max(0, Math.min(cursor, Math.max(0, fens.length - 1)));
@@ -147,14 +127,14 @@ export function GameViewerPanel(props: { gameId: number; onClose?: () => void })
     cursorChess.load(fens[safeCursor]!);
 
     return {
-      history,
-      rows: buildNotationRows(history),
+      history: appliedSans,
+      rows: buildNotationRows(appliedSans),
       fens,
       safeCursor,
       board: buildBoard(cursorChess),
       fen: fens[safeCursor] ?? "",
     };
-  }, [cursor, game.data?.startingFen, pgn.data]);
+  }, [cursor, game.data?.startingFen, game.data?.moveTree]);
 
   return (
     <section className="card games-viewer">
@@ -229,8 +209,6 @@ export function GameViewerPanel(props: { gameId: number; onClose?: () => void })
 
         <div>
           <h3>Notation</h3>
-          {pgn.isLoading ? <p className="muted">Loading PGN...</p> : null}
-          {pgn.isError ? <p className="muted">Error: {String(pgn.error)}</p> : null}
           <div className="notation-bar" role="list">
             {derived.rows.map((row) => (
               <div key={row.moveNo} className="notation-row" role="listitem">

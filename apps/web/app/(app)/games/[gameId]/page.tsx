@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchJson, fetchText } from "../../../../lib/api";
 import { useToasts } from "../../../../components/ToastsProvider";
+import { extractMainlineSans } from "../../../../lib/chess/moveTree";
 
 type GameDetail = {
   id: number;
@@ -22,6 +23,7 @@ type GameDetail = {
   whiteElo: number | null;
   blackElo: number | null;
   pgn: string;
+  moveTree: Record<string, unknown>;
 };
 
 type AnnotationResponse = {
@@ -118,6 +120,24 @@ function buildBoard(chess: Chess): BoardSquare[][] {
       };
     })
   );
+}
+
+type NotationRow = {
+  moveNo: number;
+  white: { san: string; cursor: number } | null;
+  black: { san: string; cursor: number } | null;
+};
+
+function buildNotationRows(sans: string[]): NotationRow[] {
+  const rows: NotationRow[] = [];
+  for (let i = 0; i < sans.length; i += 2) {
+    rows.push({
+      moveNo: Math.floor(i / 2) + 1,
+      white: sans[i] ? { san: sans[i]!, cursor: i + 1 } : null,
+      black: sans[i + 1] ? { san: sans[i + 1]!, cursor: i + 2 } : null,
+    });
+  }
+  return rows;
 }
 
 export default function GameViewerPage() {
@@ -271,28 +291,31 @@ export default function GameViewerPage() {
 
   const derived = useMemo(() => {
     const startingFen = game.data?.startingFen ?? "startpos";
-    const pgnText = pgn.data ?? "";
-    const chess = new Chess(startingFen && startingFen !== "startpos" ? startingFen : undefined);
-    const loaded = pgnText.trim().length > 0 ? chess.loadPgn(pgnText) : false;
-    const history = loaded ? chess.history() : [];
+    const moveSans = extractMainlineSans(game.data?.moveTree);
 
     const replay = new Chess(startingFen && startingFen !== "startpos" ? startingFen : undefined);
     const fens: string[] = [replay.fen()];
-    for (const move of history) {
-      replay.move(move);
+    const appliedSans: string[] = [];
+    for (const san of moveSans) {
+      const move = replay.move(san, { strict: false });
+      if (!move) {
+        break;
+      }
+      appliedSans.push(san);
       fens.push(replay.fen());
     }
     const safeCursor = Math.max(0, Math.min(cursor, Math.max(0, fens.length - 1)));
     const cursorChess = new Chess();
     cursorChess.load(fens[safeCursor]!);
     return {
-      history,
+      history: appliedSans,
+      rows: buildNotationRows(appliedSans),
       fens,
       safeCursor,
       board: buildBoard(cursorChess),
       fen: fens[safeCursor] ?? "",
     };
-  }, [cursor, game.data?.startingFen, pgn.data]);
+  }, [cursor, game.data?.startingFen, game.data?.moveTree]);
 
   async function runAnalysis(): Promise<void> {
     if (!derived.fen) {
@@ -499,18 +522,30 @@ export default function GameViewerPage() {
           </div>
 
           <div>
-            <h3>Moves</h3>
-            <div className="notation-list">
-              {derived.history.map((move, index) => (
-                <button
-                  key={`${move}-${index}`}
-                  type="button"
-                  className={derived.safeCursor === index + 1 ? "active" : undefined}
-                  onClick={() => setCursor(index + 1)}
-                >
-                  {index + 1}. {move}
-                </button>
+            <h3>Notation</h3>
+            <div className="notation-bar" role="list">
+              {derived.rows.map((row) => (
+                <div key={row.moveNo} className="notation-row" role="listitem">
+                  <span className="notation-no">{row.moveNo}.</span>
+                  <button
+                    type="button"
+                    className={row.white && derived.safeCursor === row.white.cursor ? "active" : undefined}
+                    onClick={() => row.white && setCursor(row.white.cursor)}
+                    disabled={!row.white}
+                  >
+                    {row.white?.san ?? ""}
+                  </button>
+                  <button
+                    type="button"
+                    className={row.black && derived.safeCursor === row.black.cursor ? "active" : undefined}
+                    onClick={() => row.black && setCursor(row.black.cursor)}
+                    disabled={!row.black}
+                  >
+                    {row.black?.san ?? ""}
+                  </button>
+                </div>
               ))}
+              {derived.rows.length === 0 ? <p className="muted">No moves parsed.</p> : null}
             </div>
             <h3>PGN</h3>
             <pre className="pgn-pre">{pgn.data ?? game.data?.pgn ?? ""}</pre>
