@@ -40,6 +40,9 @@ Project ID: `aea9db8b-a434-4826-864e-4869ed452dbe`
 2. `DATABASE_URL=${{Postgres.DATABASE_URL}}`
 3. `REDIS_URL=${{Redis.REDIS_URL}}`
 4. `API_BASE_URL=https://api-production-d291.up.railway.app`
+5. Stockfish (required for analysis jobs):
+   - `RAILPACK_DEPLOY_APT_PACKAGES=stockfish`
+   - `STOCKFISH_BINARY=/usr/games/stockfish`
 
 ## Custom Domains Created in Railway
 
@@ -98,5 +101,5 @@ railway up --service worker --path-as-root apps/worker -d
 
 1. Workflow: `.github/workflows/railway-deploy.yml`
 2. Trigger: push to `main` for app/workflow path changes.
-3. Requires GitHub Actions secret `RAILWAY_TOKEN` to be a valid Railway API/deploy token.
-4. If runs fail with `Unauthorized`, rotate/regenerate the token in Railway dashboard and update the GitHub secret.
+3. Deployments are handled by the Railway dashboard GitHub connector (per-service source configuration).
+4. This GitHub workflow runs post-deploy checks only (smoke + E2E) and does not deploy via Railway CLI.

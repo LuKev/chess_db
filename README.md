@@ -57,6 +57,7 @@ Notes:
 1. API migrations auto-run at startup when `AUTO_MIGRATE=true`.
 2. API integration tests require `DATABASE_URL` to be set (CI sets this in `.github/workflows/ci.yml`).
 3. Local worker analysis needs a `stockfish` binary on PATH (`brew install stockfish` on macOS).
+   - On Railway, install via Railpack and set `STOCKFISH_BINARY=/usr/games/stockfish` (see `docs/railway_setup.md`).
 4. API exposes Prometheus metrics at `/metrics` by default; worker exposes metrics at `http://localhost:9465/metrics`.
 5. Optional Sentry support:
    - API: `API_SENTRY_DSN`, `API_SENTRY_ENV`
@@ -135,12 +136,8 @@ Railway deployment helper:
 Automatic deploy on push:
 
 1. Workflow file: `.github/workflows/railway-deploy.yml`
-2. Required GitHub secret: `RAILWAY_TOKEN`
-3. Generate this as a Railway API/deploy token in Railway dashboard (account/project token), then set it:
-
-```bash
-gh secret set RAILWAY_TOKEN -R LuKev/chess_db
-```
+2. Deployments are handled by the Railway dashboard GitHub connector (service source = GitHub repo/branch).
+3. This workflow runs post-deploy checks (API smoke checks + Playwright E2E) against production URLs and does not deploy via the Railway CLI.
 
 ## Convert to Remote Git Repo
 

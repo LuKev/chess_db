@@ -29,6 +29,10 @@ apps/web/test-results/
 # Logs
 *.log
 
+# Railway local link state
+.railway/
+railway.json
+
 # Codex workspace files
 AGENTS.md
 NOTES.md

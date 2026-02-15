@@ -7,7 +7,7 @@
 
 ## Current Durable Notes (Accurate Snapshot)
 1. Repo root: `/Users/kevin/projects/chess_db` (monorepo: `apps/web`, `apps/api`, `apps/worker`).
-2. Primary deploy target is Railway with services `web`, `api`, `worker`; CI in `.github/workflows/ci.yml`, deploy workflow in `.github/workflows/railway-deploy.yml`.
+2. Primary deploy target is Railway with services `web`, `api`, `worker`; CI in `.github/workflows/ci.yml`; `.github/workflows/railway-deploy.yml` runs post-deploy checks (smoke + E2E) and does not deploy.
 3. Production domains: web served under `/chess_db` on `kezilu.com`; API at `https://api.kezilu.com` (custom domain).
 4. API CORS/CSRF allowlists include both `https://kezilu.com` and `https://www.kezilu.com`; `CORS_ORIGIN` supports comma-separated origins.
 5. Smoke checks: `SMOKE_API_BASE_URL=https://api.kezilu.com RELEASE_REQUIRED_API_ORIGIN=https://api.kezilu.com node scripts/smoke_post_deploy.mjs`.
@@ -26,14 +26,14 @@
 18. Generated test artifacts: Playwright outputs `apps/web/test-results/` and `apps/web/playwright-report/` and are ignored in `.gitignore`.
 19. Local environment: Docker is present at `/opt/homebrew/bin/docker`.
 20. Tooling constraint: destructive shell commands may be blocked by policy (e.g. `rm -rf`, `git rm --cached`); prefer non-destructive edits via `apply_patch` or add ignores.
-21. Deployment blocker (current): Railway CLI auth/token appears invalid:
-    - Local `railway` commands fail (`error decoding response body`).
-    - GitHub Actions `Railway Deploy` fails with `Unauthorized. Please login with railway login` when running `railway up`.
-    - Likely requires refreshing the GitHub `RAILWAY_TOKEN` secret and/or re-authenticating locally.
-22. Games are per-user. A new account starts empty until a PGN import job runs and the worker processes it into `games`.
-23. If "Seed starter games" or uploads queue but no games appear, the most common cause is the worker not running / BullMQ-Redis connection miswiring (imports stay `queued`).
-24. `POST /api/imports/starter` now extracts ~N games into a `.pgn` before uploading, instead of storing the full upstream `.pgn.zst` blob.
-25. `POST /api/imports/starter` must store the object key ending in `.pgn` (not `.pgn.zst`) or the worker will attempt zstd decompression and fail with `invalid zstd data`.
-26. Web UI convention: prefer lighter/smaller buttons (reduced padding/radius, tighter typography) and shared utility classes in `apps/web/app/globals.css` over per-component inline styles.
-27. `/games` filters are reactive (no "Apply" button): changing any filter resets to page 1 and clears selection to avoid stale bulk actions.
-28. Password reset UX on `/login` is a two-step flow: step 1 requests a token by email; step 2 submits token + new password, and is disabled until a request has been made (or a token is present).
+21. Deployments use the Railway dashboard GitHub connector (per-service source set to the repo/branch). GitHub Actions no longer requires a Railway token.
+22. Railway worker requires Stockfish for analysis jobs:
+   - Install via Railway Railpack: `RAILPACK_DEPLOY_APT_PACKAGES=stockfish`
+   - Debian installs to `/usr/games/stockfish`, so also set `STOCKFISH_BINARY=/usr/games/stockfish` (since `/usr/games` may not be on PATH).
+23. Games are per-user. A new account starts empty until a PGN import job runs and the worker processes it into `games`.
+24. If "Seed starter games" or uploads queue but no games appear, the most common cause is the worker not running / BullMQ-Redis connection miswiring (imports stay `queued`).
+25. `POST /api/imports/starter` now extracts ~N games into a `.pgn` before uploading, instead of storing the full upstream `.pgn.zst` blob.
+26. `POST /api/imports/starter` must store the object key ending in `.pgn` (not `.pgn.zst`) or the worker will attempt zstd decompression and fail with `invalid zstd data`.
+27. Web UI convention: prefer lighter/smaller buttons (reduced padding/radius, tighter typography) and shared utility classes in `apps/web/app/globals.css` over per-component inline styles.
+28. `/games` filters are reactive (no "Apply" button): changing any filter resets to page 1 and clears selection to avoid stale bulk actions.
+29. Password reset UX on `/login` is a two-step flow: step 1 requests a token by email; step 2 submits token + new password, and is disabled until a request has been made (or a token is present).

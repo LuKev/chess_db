@@ -1,4 +1,4 @@
-name: Railway Deploy
+name: Railway Post-Deploy Checks
 
 on:
   push:
@@ -14,17 +14,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: railway-deploy-main
+  group: railway-post-deploy-checks-main
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  checks:
     runs-on: ubuntu-latest
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_PROJECT_ID: aea9db8b-a434-4826-864e-4869ed452dbe
-      RAILWAY_ENVIRONMENT_ID: 46109543-4ee7-4b19-a824-4835282e2358
       SMOKE_API_BASE_URL: https://api.kezilu.com
       RELEASE_REQUIRED_API_ORIGIN: https://api.kezilu.com
       PLAYWRIGHT_BASE_URL: https://kezilu.com/chess_db
@@ -37,28 +33,26 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
 
-      - name: Install Railway CLI
-        # Keep this aligned with local Railway CLI behavior. Older CLI versions
-        # have different flag names and auth behavior.
-        run: npm install -g @railway/cli@4.23.2
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Deploy web
+      - name: Wait for API health
         run: |
-          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service web
-          railway up --path-as-root apps/web --ci
+          set -euo pipefail
+          for i in {1..30}; do
+            if curl -fsS "$SMOKE_API_BASE_URL/health" >/dev/null; then
+              echo "API healthy"
+              exit 0
+            fi
+            echo "Waiting for API health..."
+            sleep 10
+          done
+          echo "API health did not become ready" >&2
+          exit 1
 
-      - name: Deploy api
-        run: |
-          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service api
-          railway up --path-as-root apps/api --ci
-
-      - name: Deploy worker
-        run: |
-          railway link --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --service worker
-          railway up --path-as-root apps/worker --ci
-
-      - name: Post-deploy smoke checks
+      - name: Smoke checks
         run: node scripts/smoke_post_deploy.mjs
 
       - name: Install Playwright Chromium
