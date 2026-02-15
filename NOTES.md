@@ -16,21 +16,24 @@
 8. Important web routing gotcha: normalize `next` redirects to avoid `/chess_db/chess_db/...` 404s; handled via `apps/web/lib/basePath.ts` (`stripAppBasePath`).
 9. Web pages implemented (non-diagnostics): `/games`, `/games/[gameId]`, `/import`, `/search/position`, `/openings`, `/tags`, `/collections` (others still stubbed).
 10. Legacy all-in-one UI remains at `/diagnostics` (still used by E2E seed/open flow) while feature pages are extracted.
-11. Import pipeline exists (async jobs, supports `.pgn` and `.pgn.zst`); UI currently implemented on `/import` for queue sample import and upload.
-12. Position search API exists (`POST /api/search/position`); UI currently implemented on `/search/position` (raw FEN input, exact match).
-13. Opening tree API exists (`GET /api/openings/tree`); UI currently implemented on `/openings` (FEN + depth, basic breadcrumb).
-14. Tags and collections APIs exist with CRUD + bulk assignment; basic management UI exists on `/tags` and `/collections`.
-15. Generated test artifacts: Playwright outputs `apps/web/test-results/` and `apps/web/playwright-report/` and are ignored in `.gitignore`.
-16. Local environment: Docker is present at `/opt/homebrew/bin/docker`.
-17. Tooling constraint: destructive shell commands may be blocked by policy (e.g. `rm -rf`, `git rm --cached`); prefer non-destructive edits via `apply_patch` or add ignores.
-18. Deployment blocker (current): Railway CLI auth/token appears invalid:
+11. `/games` includes an inline sticky viewer panel (board + side notation bar) opened via the `View` action; full page viewer remains at `/games/[gameId]`.
+12. UI testing hook: `/viewer-demo` is an API-free viewer page (public route) intended for quick viewer styling checks; Playwright spec `apps/web/e2e/viewer_demo_ui.spec.ts` asserts piece sizing and writes a reference screenshot to `apps/web/test-results/viewer-demo-board.png`.
+13. Import pipeline exists (async jobs, supports `.pgn` and `.pgn.zst`); UI currently implemented on `/import` for queue sample import and upload.
+14. Sample seed content (`POST /api/imports/sample` and "Insert sample game" buttons) now uses a real full-length PGN: Karpov vs Kasparov, World Chess Championship 1985 (1985-10-15), rather than a dummy mini-line.
+15. Position search API exists (`POST /api/search/position`); UI currently implemented on `/search/position` (raw FEN input, exact match).
+16. Opening tree API exists (`GET /api/openings/tree`); UI currently implemented on `/openings` (FEN + depth, basic breadcrumb).
+17. Tags and collections APIs exist with CRUD + bulk assignment; basic management UI exists on `/tags` and `/collections`.
+18. Generated test artifacts: Playwright outputs `apps/web/test-results/` and `apps/web/playwright-report/` and are ignored in `.gitignore`.
+19. Local environment: Docker is present at `/opt/homebrew/bin/docker`.
+20. Tooling constraint: destructive shell commands may be blocked by policy (e.g. `rm -rf`, `git rm --cached`); prefer non-destructive edits via `apply_patch` or add ignores.
+21. Deployment blocker (current): Railway CLI auth/token appears invalid:
     - Local `railway` commands fail (`error decoding response body`).
     - GitHub Actions `Railway Deploy` fails with `Unauthorized. Please login with railway login` when running `railway up`.
     - Likely requires refreshing the GitHub `RAILWAY_TOKEN` secret and/or re-authenticating locally.
-19. Games are per-user. A new account starts empty until a PGN import job runs and the worker processes it into `games`.
-20. If "Seed starter games" or uploads queue but no games appear, the most common cause is the worker not running / BullMQ-Redis connection miswiring (imports stay `queued`).
-21. `POST /api/imports/starter` now extracts ~N games into a `.pgn` before uploading, instead of storing the full upstream `.pgn.zst` blob.
-22. `POST /api/imports/starter` must store the object key ending in `.pgn` (not `.pgn.zst`) or the worker will attempt zstd decompression and fail with `invalid zstd data`.
-23. Web UI convention: prefer lighter/smaller buttons (reduced padding/radius, tighter typography) and shared utility classes in `apps/web/app/globals.css` over per-component inline styles.
-24. `/games` filters are reactive (no "Apply" button): changing any filter resets to page 1 and clears selection to avoid stale bulk actions.
-25. Password reset UX on `/login` is a two-step flow: step 1 requests a token by email; step 2 submits token + new password, and is disabled until a request has been made (or a token is present).
+22. Games are per-user. A new account starts empty until a PGN import job runs and the worker processes it into `games`.
+23. If "Seed starter games" or uploads queue but no games appear, the most common cause is the worker not running / BullMQ-Redis connection miswiring (imports stay `queued`).
+24. `POST /api/imports/starter` now extracts ~N games into a `.pgn` before uploading, instead of storing the full upstream `.pgn.zst` blob.
+25. `POST /api/imports/starter` must store the object key ending in `.pgn` (not `.pgn.zst`) or the worker will attempt zstd decompression and fail with `invalid zstd data`.
+26. Web UI convention: prefer lighter/smaller buttons (reduced padding/radius, tighter typography) and shared utility classes in `apps/web/app/globals.css` over per-component inline styles.
+27. `/games` filters are reactive (no "Apply" button): changing any filter resets to page 1 and clears selection to avoid stale bulk actions.
+28. Password reset UX on `/login` is a two-step flow: step 1 requests a token by email; step 2 submits token + new password, and is disabled until a request has been made (or a token is present).

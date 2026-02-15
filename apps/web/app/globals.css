@@ -258,6 +258,19 @@ button:disabled {
   gap: 16px;
 }
 
+.games-split {
+  display: grid;
+  grid-template-columns: 1fr minmax(320px, 520px);
+  gap: 16px;
+  align-items: start;
+}
+
+.games-viewer {
+  position: sticky;
+  top: 12px;
+  align-self: start;
+}
+
 .board {
   width: 100%;
   border: 1px solid var(--line);
@@ -298,7 +311,8 @@ button:disabled {
 .palette-item.active,
 .crumb-active,
 .line-list button.active,
-.notation-list button.active {
+.notation-list button.active,
+.notation-row button.active {
   border-color: #1b4d35;
   background: #1b4d35;
   color: #fff;
@@ -318,7 +332,8 @@ button:disabled {
   display: grid;
   place-items: center;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 18px;
+  font-size: clamp(24px, 8vw, 44px);
+  line-height: 1;
 }
 
 .square.light {
@@ -337,6 +352,34 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.notation-bar {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  max-height: 420px;
+  overflow: auto;
+  background: #fff;
+  display: grid;
+  gap: 6px;
+}
+
+.notation-row {
+  display: grid;
+  grid-template-columns: 36px 1fr 1fr;
+  gap: 6px;
+  align-items: center;
+}
+
+.notation-no {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.notation-row button {
+  width: 100%;
+  text-align: left;
 }
 
 .pgn-pre {
@@ -436,7 +479,12 @@ th {
   }
 
   .viewer-grid,
-  .fen-editor-grid {
+  .fen-editor-grid,
+  .games-split {
     grid-template-columns: 1fr;
+  }
+
+  .games-viewer {
+    position: static;
   }
 }
