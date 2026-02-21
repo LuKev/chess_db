@@ -1,8 +1,9 @@
-import "dotenv/config";
+import { loadEnv } from "./env.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { captureException, flushSentry, initSentry } from "./observability/sentry.js";
 
+loadEnv();
 const config = loadConfig();
 initSentry({
   dsn: config.sentryDsn,

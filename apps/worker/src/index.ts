@@ -1,4 +1,4 @@
-import "dotenv/config";
+import { loadEnv } from "./env.js";
 import { Queue, Worker, type Job } from "bullmq";
 import { loadWorkerConfig } from "./config.js";
 import { createPool } from "./db.js";
@@ -34,6 +34,7 @@ import {
   initSentry,
 } from "./observability/sentry.js";
 
+loadEnv();
 const config = loadWorkerConfig();
 initSentry({
   dsn: config.sentryDsn,
