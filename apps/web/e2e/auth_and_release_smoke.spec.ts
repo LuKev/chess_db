@@ -10,7 +10,7 @@ function apiOriginFromBase(baseURL: string): string {
     return "https://api.kezilu.com";
   }
   if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-    return "http://127.0.0.1:4000";
+    return "http://localhost:4000";
   }
   return `${url.protocol}//${url.hostname.replace(/^www\./, "api.")}${url.port ? `:${url.port}` : ""}`;
 }
@@ -87,13 +87,87 @@ test.describe("release-like browser coverage", () => {
 
     await page.goto(joinPath(appEntryPath(baseURL), "/diagnostics"));
     await page.getByTestId("seed-insert-sample-game").click();
-    await expect(page.getByRole("button", { name: "Open" }).first()).toBeVisible({
+    const sampleGameRow = page
+      .locator("tr")
+      .filter({ hasText: /Karpov, Anatoly/ })
+      .filter({ hasText: /Kasparov, Garry/ })
+      .first();
+    await expect(sampleGameRow).toBeVisible({
       timeout: 20_000,
     });
-    await page.getByRole("button", { name: "Open" }).first().click();
+    await sampleGameRow.getByRole("button", { name: "Open", exact: true }).click();
     await expect(page.getByTestId("viewer-status")).toContainText("Viewing game", {
       timeout: 20_000,
     });
+  });
+
+  test("game replay controls advance and reset board position", async ({ page, baseURL }) => {
+    const configuredEmail = process.env.E2E_EMAIL?.trim();
+    const configuredPassword = process.env.E2E_PASSWORD?.trim();
+    const email = configuredEmail ?? randomEmail("e2e-replay");
+    const password = configuredPassword ?? "E2ePassword123!";
+
+    await page.goto(joinPath(appEntryPath(baseURL), "/login"));
+    if (configuredEmail && configuredPassword) {
+      await loginViaUi({ page, email, password });
+    } else {
+      await registerViaUi({ page, email, password });
+    }
+
+    await page.goto(joinPath(appEntryPath(baseURL), "/diagnostics"));
+    await page.getByTestId("seed-insert-sample-game").click();
+    const sampleGameRow = page
+      .locator("tr")
+      .filter({ hasText: /Karpov, Anatoly/ })
+      .filter({ hasText: /Kasparov, Garry/ })
+      .first();
+    await expect(sampleGameRow).toBeVisible({
+      timeout: 20_000,
+    });
+    const openButton = sampleGameRow.getByRole("button", { name: "Open", exact: true });
+    await openButton.click();
+    await expect(page.getByTestId("viewer-status")).toContainText("Viewing game", {
+      timeout: 20_000,
+    });
+
+    const viewerSection = page
+      .locator("section.card")
+      .filter({ has: page.getByRole("heading", { name: "Game Viewer" }) })
+      .first();
+    const moveIndex = viewerSection.getByText(/^Move index: \d+\/\d+$/);
+    const board = viewerSection.locator(".board").first();
+    const boardSnapshot = async (): Promise<string> =>
+      board
+        .locator(".square")
+        .evaluateAll((squares) =>
+          squares
+            .map((square) => `${square.getAttribute("title") ?? ""}:${(square.textContent ?? "").trim()}`)
+            .join("|")
+        );
+
+    await expect(moveIndex).toContainText(/^Move index: 0\/\d+$/);
+    const startPosition = await boardSnapshot();
+
+    await viewerSection.getByRole("button", { name: ">", exact: true }).click();
+    await expect(moveIndex).toContainText(/^Move index: 1\/\d+$/);
+    const firstPlyPosition = await boardSnapshot();
+    expect(firstPlyPosition).not.toBe(startPosition);
+
+    await viewerSection.getByRole("button", { name: "<", exact: true }).click();
+    await expect(moveIndex).toContainText(/^Move index: 0\/\d+$/);
+    await expect.poll(boardSnapshot).toBe(startPosition);
+
+    await viewerSection.getByRole("button", { name: ">|", exact: true }).click();
+    const endIndexText = await moveIndex.textContent();
+    const endMatch = endIndexText?.match(/Move index: (\d+)\/(\d+)/);
+    expect(endMatch).toBeTruthy();
+    expect(endMatch?.[1]).toBe(endMatch?.[2]);
+    const endPosition = await boardSnapshot();
+    expect(endPosition).not.toBe(startPosition);
+
+    await viewerSection.getByRole("button", { name: "|<", exact: true }).click();
+    await expect(moveIndex).toContainText(/^Move index: 0\/\d+$/);
+    await expect.poll(boardSnapshot).toBe(startPosition);
   });
 
   test("csrf rejects bad origin and password reset ui is wired", async ({
@@ -134,9 +208,11 @@ test.describe("release-like browser coverage", () => {
 
     await page.getByTestId("reset-email").fill(email);
     await page.getByTestId("reset-request").click();
-    await expect(page.getByTestId("reset-status")).toContainText(/reset|email|token/i);
+    await expect(page.getByTestId("reset-status")).toContainText(/generated|sent/i);
 
-    await page.getByTestId("reset-token").fill("invalid-token");
+    await page
+      .getByTestId("reset-token")
+      .fill("invalid-token-abcdefghijklmnopqrstuvwxyz012345");
     await page.getByTestId("reset-new-password").fill("AnotherPass123!");
     await page.getByTestId("reset-confirm").click();
     await expect(page.getByTestId("reset-status")).toContainText(/failed|invalid|expired/i);
