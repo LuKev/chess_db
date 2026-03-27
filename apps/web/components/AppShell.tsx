@@ -28,6 +28,8 @@ const NAV: NavItem[] = [
   { section: "Dev", href: "/diagnostics", label: "Diagnostics" },
 ];
 
+const NAV_COLLAPSED_STORAGE_KEY = "chessdb.nav.collapsed";
+
 function groupNav(items: NavItem[]): Array<{ section: string; items: NavItem[] }> {
   const sections: Array<{ section: string; items: NavItem[] }> = [];
   for (const item of items) {
@@ -50,23 +52,42 @@ export function AppShell(props: {
   const queryClient = useQueryClient();
   const toasts = useToasts();
   const [navOpen, setNavOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    function onResize() {
-      if (window.innerWidth > 920) {
+
+    const stored = window.localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY);
+    if (stored === "1") {
+      setNavCollapsed(true);
+    }
+
+    function syncViewport() {
+      const desktop = window.innerWidth > 920;
+      setIsDesktop(desktop);
+      if (desktop) {
         setNavOpen(false);
       }
     }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+
+    syncViewport();
+    window.addEventListener("resize", syncViewport);
+    return () => window.removeEventListener("resize", syncViewport);
   }, []);
 
   useEffect(() => {
     setNavOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(NAV_COLLAPSED_STORAGE_KEY, navCollapsed ? "1" : "0");
+  }, [navCollapsed]);
 
   async function logout(): Promise<void> {
     const response = await fetchJson<{ ok: boolean }>("/api/auth/logout", { method: "POST" }, { jsonBody: false });
@@ -87,8 +108,16 @@ export function AppShell(props: {
 
   const sections = groupNav(NAV);
 
+  function toggleNavigation(): void {
+    if (isDesktop) {
+      setNavCollapsed((value) => !value);
+      return;
+    }
+    setNavOpen((value) => !value);
+  }
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>
       <button
         type="button"
         className={`app-shell-overlay ${navOpen ? "open" : ""}`}
@@ -136,8 +165,13 @@ export function AppShell(props: {
       </aside>
       <div className="app-shell-content">
         <header className="app-shell-top">
-          <button type="button" onClick={() => setNavOpen((v) => !v)} aria-expanded={navOpen} aria-controls="app-nav">
-            Menu
+          <button
+            type="button"
+            onClick={() => toggleNavigation()}
+            aria-expanded={isDesktop ? !navCollapsed : navOpen}
+            aria-controls="app-nav"
+          >
+            {isDesktop ? (navCollapsed ? "Show sidebar" : "Hide sidebar") : "Menu"}
           </button>
           <div className="app-shell-title">Chess DB</div>
           <div className="app-shell-user">{props.userEmail}</div>

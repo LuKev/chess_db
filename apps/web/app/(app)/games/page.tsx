@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../../../lib/api";
 import { useToasts } from "../../../components/ToastsProvider";
@@ -23,7 +23,8 @@ type GameRow = {
   event: string | null;
   eco: string | null;
   plyCount: number | null;
-  avgElo: number | null;
+  whiteElo: number | null;
+  blackElo: number | null;
   tags: TagItem[];
 };
 
@@ -41,20 +42,119 @@ type CollectionItem = {
   gameCount: number;
 };
 
+type GameColumnId =
+  | "id"
+  | "white"
+  | "black"
+  | "result"
+  | "date"
+  | "eco"
+  | "event"
+  | "whiteElo"
+  | "blackElo"
+  | "tags"
+  | "plyCount";
+
+type GameColumn = {
+  id: GameColumnId;
+  label: string;
+  compact?: boolean;
+  defaultVisible?: boolean;
+};
+
+const GAMES_DISPLAY_STORAGE_KEY = "chessdb.games.display.v1";
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 150] as const;
+const DEFAULT_FONT_SIZE = 13;
+const DEFAULT_COLUMN_WIDTH = 170;
+
+const GAME_COLUMNS: GameColumn[] = [
+  { id: "id", label: "ID", compact: true },
+  { id: "white", label: "White" },
+  { id: "black", label: "Black" },
+  { id: "result", label: "Result", compact: true },
+  { id: "date", label: "Date", compact: true },
+  { id: "eco", label: "ECO", compact: true },
+  { id: "event", label: "Event", defaultVisible: false },
+  { id: "whiteElo", label: "White Elo", compact: true },
+  { id: "blackElo", label: "Black Elo", compact: true },
+  { id: "tags", label: "Tags", defaultVisible: false },
+  { id: "plyCount", label: "Ply", compact: true },
+];
+
+const DEFAULT_VISIBLE_COLUMNS = GAME_COLUMNS.filter((column) => column.defaultVisible !== false).map((column) => column.id);
+
+function isPageSizeOption(value: number): value is (typeof PAGE_SIZE_OPTIONS)[number] {
+  return PAGE_SIZE_OPTIONS.includes(value as (typeof PAGE_SIZE_OPTIONS)[number]);
+}
+
+function normalizeVisibleColumns(raw: unknown): GameColumnId[] {
+  if (!Array.isArray(raw)) {
+    return DEFAULT_VISIBLE_COLUMNS;
+  }
+
+  const known = new Set(GAME_COLUMNS.map((column) => column.id));
+  const values = raw.filter((value): value is GameColumnId => typeof value === "string" && known.has(value as GameColumnId));
+  return values.length > 0 ? GAME_COLUMNS.filter((column) => values.includes(column.id)).map((column) => column.id) : DEFAULT_VISIBLE_COLUMNS;
+}
+
+function columnCellStyle(column: GameColumn): CSSProperties {
+  return {
+    minWidth: column.compact ? "84px" : "var(--games-column-width)",
+  };
+}
+
+function renderGameCell(game: GameRow, columnId: GameColumnId): { content: ReactNode; title?: string } {
+  switch (columnId) {
+    case "id":
+      return { content: game.id, title: String(game.id) };
+    case "white":
+      return { content: game.white, title: game.white };
+    case "black":
+      return { content: game.black, title: game.black };
+    case "result":
+      return { content: game.result, title: game.result };
+    case "date":
+      return { content: game.date ?? "-", title: game.date ?? undefined };
+    case "eco":
+      return { content: game.eco ?? "-", title: game.eco ?? undefined };
+    case "event":
+      return { content: game.event ?? "-", title: game.event ?? undefined };
+    case "whiteElo":
+      return { content: game.whiteElo ?? "-", title: typeof game.whiteElo === "number" ? String(game.whiteElo) : undefined };
+    case "blackElo":
+      return { content: game.blackElo ?? "-", title: typeof game.blackElo === "number" ? String(game.blackElo) : undefined };
+    case "tags": {
+      const tags = game.tags.length > 0 ? game.tags.map((tag) => tag.name).join(", ") : "-";
+      return { content: tags, title: tags !== "-" ? tags : undefined };
+    }
+    case "plyCount":
+      return { content: game.plyCount ?? "-", title: typeof game.plyCount === "number" ? String(game.plyCount) : undefined };
+  }
+}
+
 export default function GamesPage() {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<"date_desc" | "date_asc" | "white" | "black" | "eco">("date_desc");
   const [player, setPlayer] = useState("");
   const [eco, setEco] = useState("");
   const [openingPrefix, setOpeningPrefix] = useState("");
+  const [eventFilter, setEventFilter] = useState("");
   const [result, setResult] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [whiteEloMin, setWhiteEloMin] = useState("");
+  const [whiteEloMax, setWhiteEloMax] = useState("");
+  const [blackEloMin, setBlackEloMin] = useState("");
+  const [blackEloMax, setBlackEloMax] = useState("");
   const [collectionId, setCollectionId] = useState<number | "">("");
   const [tagId, setTagId] = useState<number | "">("");
   const [positionFen, setPositionFen] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
   const [viewerGameId, setViewerGameId] = useState<number | null>(null);
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
+  const [columnWidth, setColumnWidth] = useState(DEFAULT_COLUMN_WIDTH);
+  const [visibleColumns, setVisibleColumns] = useState<GameColumnId[]>(DEFAULT_VISIBLE_COLUMNS);
 
   const queryClient = useQueryClient();
   const toasts = useToasts();
@@ -71,34 +171,116 @@ export default function GamesPage() {
   }, []);
 
   useEffect(() => {
-    setPage(1);
-  }, [sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen]);
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(GAMES_DISPLAY_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof parsed.pageSize === "number" && isPageSizeOption(parsed.pageSize)) {
+        setPageSize(parsed.pageSize);
+      }
+      if (typeof parsed.fontSize === "number" && parsed.fontSize >= 12 && parsed.fontSize <= 16) {
+        setFontSize(parsed.fontSize);
+      }
+      if (typeof parsed.columnWidth === "number" && parsed.columnWidth >= 120 && parsed.columnWidth <= 260) {
+        setColumnWidth(parsed.columnWidth);
+      }
+      setVisibleColumns(normalizeVisibleColumns(parsed.visibleColumns));
+    } catch {
+      // Ignore malformed local preferences and fall back to defaults.
+    }
+  }, []);
 
   useEffect(() => {
-    clearSelection();
-  }, [sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen]);
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(
+      GAMES_DISPLAY_STORAGE_KEY,
+      JSON.stringify({
+        pageSize,
+        fontSize,
+        columnWidth,
+        visibleColumns,
+      })
+    );
+  }, [pageSize, fontSize, columnWidth, visibleColumns]);
 
-  const query = useMemo(() => {
+  const filtersQuery = useMemo(() => {
     const params = new URLSearchParams();
-    params.set("page", String(page));
-    params.set("pageSize", "25");
+    params.set("pageSize", String(pageSize));
     params.set("sort", sort);
     if (player.trim()) params.set("player", player.trim());
     if (eco.trim()) params.set("eco", eco.trim());
     if (openingPrefix.trim()) params.set("openingPrefix", openingPrefix.trim());
+    if (eventFilter.trim()) params.set("event", eventFilter.trim());
     if (result.trim()) params.set("result", result.trim());
     if (fromDate.trim()) params.set("fromDate", fromDate.trim());
     if (toDate.trim()) params.set("toDate", toDate.trim());
+    if (whiteEloMin.trim()) params.set("whiteEloMin", whiteEloMin.trim());
+    if (whiteEloMax.trim()) params.set("whiteEloMax", whiteEloMax.trim());
+    if (blackEloMin.trim()) params.set("blackEloMin", blackEloMin.trim());
+    if (blackEloMax.trim()) params.set("blackEloMax", blackEloMax.trim());
     if (collectionId !== "") params.set("collectionId", String(collectionId));
     if (tagId !== "") params.set("tagId", String(tagId));
     if (positionFen.trim()) params.set("positionFen", positionFen.trim());
+    return params.toString();
+  }, [
+    pageSize,
+    sort,
+    player,
+    eco,
+    openingPrefix,
+    eventFilter,
+    result,
+    fromDate,
+    toDate,
+    whiteEloMin,
+    whiteEloMax,
+    blackEloMin,
+    blackEloMax,
+    collectionId,
+    tagId,
+    positionFen,
+  ]);
+
+  useEffect(() => {
+    setPage(1);
+    clearSelection();
+  }, [filtersQuery]);
+
+  const query = useMemo(() => {
+    const params = new URLSearchParams(filtersQuery);
+    params.set("page", String(page));
     return `?${params.toString()}`;
-  }, [page, sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen]);
+  }, [filtersQuery, page]);
 
   const games = useQuery({
     queryKey: [
       "games",
-      { page, sort, player, eco, openingPrefix, result, fromDate, toDate, collectionId, tagId, positionFen },
+      {
+        page,
+        pageSize,
+        sort,
+        player,
+        eco,
+        openingPrefix,
+        eventFilter,
+        result,
+        fromDate,
+        toDate,
+        whiteEloMin,
+        whiteEloMax,
+        blackEloMin,
+        blackEloMax,
+        collectionId,
+        tagId,
+        positionFen,
+      },
     ],
     queryFn: async (): Promise<GamesResponse> => {
       const response = await fetchJson<GamesResponse>(`/api/games${query}`, { method: "GET" });
@@ -318,6 +500,22 @@ export default function GamesPage() {
     setSelected([]);
   }
 
+  function toggleVisibleColumn(columnId: GameColumnId): void {
+    setVisibleColumns((current) => {
+      if (current.includes(columnId)) {
+        return current.length > 1 ? current.filter((value) => value !== columnId) : current;
+      }
+      return GAME_COLUMNS.filter((column) => current.includes(column.id) || column.id === columnId).map((column) => column.id);
+    });
+  }
+
+  function resetDisplaySettings(): void {
+    setPageSize(50);
+    setFontSize(DEFAULT_FONT_SIZE);
+    setColumnWidth(DEFAULT_COLUMN_WIDTH);
+    setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
+  }
+
   async function bulkAddToCollection(targetCollectionId: number): Promise<void> {
     if (selected.length === 0) {
       return;
@@ -427,15 +625,27 @@ export default function GamesPage() {
     setPlayer("");
     setEco("");
     setOpeningPrefix("");
+    setEventFilter("");
     setResult("");
     setFromDate("");
     setToDate("");
+    setWhiteEloMin("");
+    setWhiteEloMax("");
+    setBlackEloMin("");
+    setBlackEloMax("");
     setCollectionId("");
     setTagId("");
     setPositionFen("");
     setPage(1);
     clearSelection();
   }
+
+  const visibleTableColumns = GAME_COLUMNS.filter((column) => visibleColumns.includes(column.id));
+  const tableStyle = {
+    "--games-font-size": `${fontSize}px`,
+    "--games-column-width": `${columnWidth}px`,
+  } as CSSProperties;
+  const pageCount = games.data ? Math.max(1, Math.ceil(games.data.total / games.data.pageSize)) : 1;
 
   return (
     <main>
@@ -451,100 +661,250 @@ export default function GamesPage() {
         </div>
       </section>
 
-      <div className="games-split">
+      <div className={`games-layout ${viewerGameId ? "with-viewer" : ""}`}>
         <section className="card">
           <div className="section-head">
-            <h2>Game List</h2>
+            <div>
+              <h2>Game List</h2>
+              <p className="muted">Filters update immediately, and display settings stay on this browser.</p>
+            </div>
             <div className="button-row">
               <button type="button" onClick={() => void games.refetch()} disabled={games.isFetching}>
                 Refresh
               </button>
+              {viewerGameId ? (
+                <button type="button" onClick={() => setViewerGameId(null)}>
+                  Close viewer
+                </button>
+              ) : null}
             </div>
           </div>
 
-          <div className="filters">
-            <label>
-              Sort
-              <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
-                <option value="date_desc">Date desc</option>
-                <option value="date_asc">Date asc</option>
-                <option value="white">White</option>
-                <option value="black">Black</option>
-                <option value="eco">ECO</option>
-              </select>
-            </label>
-            <label>
-              Player
-              <input value={player} onChange={(event) => setPlayer(event.target.value)} placeholder="Kasparov" />
-            </label>
-            <label>
-              ECO (exact)
-              <input value={eco} onChange={(event) => setEco(event.target.value)} placeholder="B44" />
-            </label>
-            <label>
-              Opening prefix
-              <input value={openingPrefix} onChange={(event) => setOpeningPrefix(event.target.value)} placeholder="B" />
-            </label>
-            <label>
-              Result
-              <input value={result} onChange={(event) => setResult(event.target.value)} placeholder="1-0" />
-            </label>
-            <label>
-              From date
-              <input value={fromDate} onChange={(event) => setFromDate(event.target.value)} placeholder="YYYY-MM-DD" />
-            </label>
-            <label>
-              To date
-              <input value={toDate} onChange={(event) => setToDate(event.target.value)} placeholder="YYYY-MM-DD" />
-            </label>
-            <label>
-              Collection
-              <select
-                value={collectionId}
-                onChange={(event) => {
-                  const raw = event.target.value;
-                  setCollectionId(raw ? Number(raw) : "");
-                }}
-              >
-                <option value="">All</option>
-                {collections.data?.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.gameCount})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Tag
-              <select
-                value={tagId}
-                onChange={(event) => {
-                  const raw = event.target.value;
-                  setTagId(raw ? Number(raw) : "");
-                }}
-              >
-                <option value="">All</option>
-                {tags.data?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                    {typeof t.gameCount === "number" ? ` (${t.gameCount})` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Position FEN
-              <input
-                value={positionFen}
-                onChange={(event) => setPositionFen(event.target.value)}
-                placeholder="startpos or FEN"
-              />
-            </label>
-            <div className="button-row button-row-end">
-              <button type="button" onClick={() => clearFilters()}>
-                Clear filters
-              </button>
+          <div className="games-controls">
+            <div className="games-control-stack">
+              <section className="games-control-panel">
+                <div className="games-control-head">
+                  <div>
+                    <h3>Filters</h3>
+                    <p className="muted">Use search, metadata, and position filters without collapsing the table.</p>
+                  </div>
+                  <button type="button" onClick={() => clearFilters()}>
+                    Clear filters
+                  </button>
+                </div>
+
+                <div className="games-filter-grid">
+                  <label>
+                    Sort
+                    <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}>
+                      <option value="date_desc">Date desc</option>
+                      <option value="date_asc">Date asc</option>
+                      <option value="white">White</option>
+                      <option value="black">Black</option>
+                      <option value="eco">ECO</option>
+                    </select>
+                  </label>
+                  <label>
+                    Player
+                    <input value={player} onChange={(event) => setPlayer(event.target.value)} placeholder="Kasparov" />
+                  </label>
+                  <label>
+                    Event
+                    <input value={eventFilter} onChange={(event) => setEventFilter(event.target.value)} placeholder="World Championship" />
+                  </label>
+                  <label>
+                    ECO (exact)
+                    <input value={eco} onChange={(event) => setEco(event.target.value)} placeholder="B44" />
+                  </label>
+                  <label>
+                    Opening prefix
+                    <input value={openingPrefix} onChange={(event) => setOpeningPrefix(event.target.value)} placeholder="B" />
+                  </label>
+                  <label>
+                    Result
+                    <input value={result} onChange={(event) => setResult(event.target.value)} placeholder="1-0" />
+                  </label>
+                  <label>
+                    From date
+                    <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+                  </label>
+                  <label>
+                    To date
+                    <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+                  </label>
+                  <label>
+                    Collection
+                    <select
+                      value={collectionId}
+                      onChange={(event) => {
+                        const raw = event.target.value;
+                        setCollectionId(raw ? Number(raw) : "");
+                      }}
+                    >
+                      <option value="">All</option>
+                      {collections.data?.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.gameCount})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Tag
+                    <select
+                      value={tagId}
+                      onChange={(event) => {
+                        const raw = event.target.value;
+                        setTagId(raw ? Number(raw) : "");
+                      }}
+                    >
+                      <option value="">All</option>
+                      {tags.data?.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                          {typeof t.gameCount === "number" ? ` (${t.gameCount})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="games-filter-span-2">
+                    Position FEN
+                    <input
+                      value={positionFen}
+                      onChange={(event) => setPositionFen(event.target.value)}
+                      placeholder="startpos or FEN"
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section className="games-control-panel">
+                <div className="games-control-head">
+                  <div>
+                    <h3>Ratings</h3>
+                    <p className="muted">Filter specific white and black rating ranges separately.</p>
+                  </div>
+                </div>
+
+                <div className="games-filter-grid games-filter-grid-compact">
+                  <label>
+                    White Elo min
+                    <input
+                      type="number"
+                      min="1"
+                      max="4000"
+                      value={whiteEloMin}
+                      onChange={(event) => setWhiteEloMin(event.target.value)}
+                      placeholder="1800"
+                    />
+                  </label>
+                  <label>
+                    White Elo max
+                    <input
+                      type="number"
+                      min="1"
+                      max="4000"
+                      value={whiteEloMax}
+                      onChange={(event) => setWhiteEloMax(event.target.value)}
+                      placeholder="2800"
+                    />
+                  </label>
+                  <label>
+                    Black Elo min
+                    <input
+                      type="number"
+                      min="1"
+                      max="4000"
+                      value={blackEloMin}
+                      onChange={(event) => setBlackEloMin(event.target.value)}
+                      placeholder="1800"
+                    />
+                  </label>
+                  <label>
+                    Black Elo max
+                    <input
+                      type="number"
+                      min="1"
+                      max="4000"
+                      value={blackEloMax}
+                      onChange={(event) => setBlackEloMax(event.target.value)}
+                      placeholder="2800"
+                    />
+                  </label>
+                </div>
+              </section>
             </div>
+
+            <aside className="games-control-panel games-display-panel">
+              <div className="games-control-head">
+                <div>
+                  <h3>Display</h3>
+                  <p className="muted">Make the table denser without losing the columns you care about.</p>
+                </div>
+                <button type="button" onClick={() => resetDisplaySettings()}>
+                  Reset display
+                </button>
+              </div>
+
+              <label>
+                Games per page
+                <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                  {PAGE_SIZE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="games-slider-label">
+                  <span>Font size</span>
+                  <span className="games-slider-value">{fontSize}px</span>
+                </span>
+                <input
+                  type="range"
+                  min="12"
+                  max="16"
+                  step="1"
+                  value={fontSize}
+                  onChange={(event) => setFontSize(Number(event.target.value))}
+                />
+              </label>
+              <label>
+                <span className="games-slider-label">
+                  <span>Column width</span>
+                  <span className="games-slider-value">{columnWidth}px</span>
+                </span>
+                <input
+                  type="range"
+                  min="120"
+                  max="260"
+                  step="10"
+                  value={columnWidth}
+                  onChange={(event) => setColumnWidth(Number(event.target.value))}
+                />
+              </label>
+
+              <div className="subsection">
+                <div className="section-head">
+                  <strong>Columns</strong>
+                  <span className="muted-small">{visibleTableColumns.length} visible</span>
+                </div>
+                <div className="games-column-picker">
+                  {GAME_COLUMNS.map((column) => (
+                    <label key={column.id} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={visibleColumns.includes(column.id)}
+                        onChange={() => toggleVisibleColumn(column.id)}
+                      />
+                      <span>{column.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="muted-small">Selection and action columns stay visible.</p>
+              </div>
+            </aside>
           </div>
 
           <div className="button-row button-row-spaced">
@@ -635,7 +995,7 @@ export default function GamesPage() {
           {games.data ? (
             <>
               <p className="muted">
-                {games.data.total} total, page {games.data.page}
+                Showing {games.data.items.length} of {games.data.total} games, page {games.data.page} of {pageCount}
               </p>
 
               {games.data.total === 0 ? (
@@ -664,45 +1024,47 @@ export default function GamesPage() {
                 </section>
               ) : null}
 
-              <div className="table-wrap">
-                <table>
+              <div className="table-wrap games-table-wrap" style={tableStyle}>
+                <table className="games-table">
                   <thead>
                     <tr>
-                      <th>Select</th>
-                      <th>ID</th>
-                      <th>White</th>
-                      <th>Black</th>
-                      <th>Result</th>
-                      <th>Date</th>
-                      <th>ECO</th>
-                      <th>Event</th>
-                      <th>Avg Elo</th>
-                      <th>Tags</th>
-                      <th>Ply</th>
-                      <th>Action</th>
+                      <th className="games-col-fixed" style={{ minWidth: "68px" }}>
+                        Select
+                      </th>
+                      {visibleTableColumns.map((column) => (
+                        <th key={column.id} className={column.compact ? "games-col-compact" : undefined} style={columnCellStyle(column)}>
+                          {column.label}
+                        </th>
+                      ))}
+                      <th className="games-col-actions" style={{ minWidth: "118px" }}>
+                        Action
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {games.data.items.map((game) => (
                       <tr key={game.id}>
-                        <td>
+                        <td className="games-col-fixed">
                           <input
                             type="checkbox"
                             checked={selected.includes(game.id)}
                             onChange={() => toggleSelected(game.id)}
                           />
                         </td>
-                        <td>{game.id}</td>
-                        <td>{game.white}</td>
-                        <td>{game.black}</td>
-                        <td>{game.result}</td>
-                        <td>{game.date ?? "-"}</td>
-                        <td>{game.eco ?? "-"}</td>
-                        <td>{game.event ?? "-"}</td>
-                        <td>{game.avgElo ? Math.round(game.avgElo) : "-"}</td>
-                        <td>{game.tags.length > 0 ? game.tags.map((tag) => tag.name).join(", ") : "-"}</td>
-                        <td>{game.plyCount ?? "-"}</td>
-                        <td>
+                        {visibleTableColumns.map((column) => {
+                          const cell = renderGameCell(game, column.id);
+                          return (
+                            <td
+                              key={column.id}
+                              title={cell.title}
+                              className={column.compact ? "games-col-compact" : undefined}
+                              style={columnCellStyle(column)}
+                            >
+                              {cell.content}
+                            </td>
+                          );
+                        })}
+                        <td className="games-col-actions">
                           <div className="button-row">
                             <button type="button" onClick={() => setViewerGameId(game.id)}>
                               View
@@ -714,7 +1076,7 @@ export default function GamesPage() {
                     ))}
                     {games.data.items.length === 0 ? (
                       <tr>
-                        <td colSpan={12}>No games yet. Use Import or insert a sample game.</td>
+                        <td colSpan={visibleTableColumns.length + 2}>No games yet. Use Import or insert a sample game.</td>
                       </tr>
                     ) : null}
                   </tbody>
@@ -725,14 +1087,12 @@ export default function GamesPage() {
                   Previous
                 </button>
                 <span>
-                  Page {page} / {Math.max(1, Math.ceil(games.data.total / games.data.pageSize))}
+                  Page {page} / {pageCount}
                 </span>
                 <button
                   type="button"
-                  onClick={() =>
-                    setPage((v) => Math.min(Math.max(1, Math.ceil(games.data.total / games.data.pageSize)), v + 1))
-                  }
-                  disabled={page >= Math.max(1, Math.ceil(games.data.total / games.data.pageSize))}
+                  onClick={() => setPage((v) => Math.min(pageCount, v + 1))}
+                  disabled={page >= pageCount}
                 >
                   Next
                 </button>
@@ -741,14 +1101,7 @@ export default function GamesPage() {
           ) : null}
         </section>
 
-        {viewerGameId ? (
-          <GameViewerPanel gameId={viewerGameId} onClose={() => setViewerGameId(null)} />
-        ) : (
-          <section className="card games-viewer">
-            <h2>Viewer</h2>
-            <p className="muted">Select a game to view it here.</p>
-          </section>
-        )}
+        {viewerGameId ? <GameViewerPanel gameId={viewerGameId} onClose={() => setViewerGameId(null)} /> : null}
       </div>
     </main>
   );
