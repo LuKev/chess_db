@@ -715,6 +715,9 @@ export default function Home() {
   const [annotationRedoStack, setAnnotationRedoStack] = useState<AnnotationSnapshot[]>([]);
   const annotationAutosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressAnnotationTrackingRef = useRef(false);
+  const currentViewerGameIdRef = useRef<number | null>(null);
+  const currentViewerCursorRef = useRef(0);
+  const currentViewerLineIdRef = useRef("mainline");
   const [engineLines, setEngineLines] = useState<EngineLine[]>([]);
   const [engineLineStatus, setEngineLineStatus] = useState("No saved engine lines");
 
@@ -1240,8 +1243,14 @@ export default function Home() {
       const savedCursor = typeof saved.cursor === "number" ? saved.cursor : 0;
       const savedLine =
         lines.find((line) => line.id === savedLineId) ?? defaultLine;
+      const viewerStateUntouched =
+        currentViewerGameIdRef.current === game.id &&
+        currentViewerCursorRef.current === 0 &&
+        currentViewerLineIdRef.current === defaultLine.id;
 
-      applyNotationLine(game.startingFen, savedLine, savedCursor);
+      if (viewerStateUntouched) {
+        applyNotationLine(game.startingFen, savedLine, savedCursor);
+      }
       applyAnnotationSnapshot({
         annotationText: typeof comment === "string" ? comment : "",
         annotationHighlightsInput: asAnnotationInput(saved.highlights),
@@ -2665,6 +2674,18 @@ export default function Home() {
     setPage(1);
     void refreshGames(1);
   }
+
+  useEffect(() => {
+    currentViewerGameIdRef.current = selectedGameId;
+  }, [selectedGameId]);
+
+  useEffect(() => {
+    currentViewerCursorRef.current = cursor;
+  }, [cursor]);
+
+  useEffect(() => {
+    currentViewerLineIdRef.current = activeLineId;
+  }, [activeLineId]);
 
   useEffect(() => {
     void refreshSession();

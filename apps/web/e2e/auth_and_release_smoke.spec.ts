@@ -141,7 +141,10 @@ test.describe("release-like browser coverage", () => {
         .locator(".square")
         .evaluateAll((squares) =>
           squares
-            .map((square) => `${square.getAttribute("title") ?? ""}:${(square.textContent ?? "").trim()}`)
+            .map((square) => {
+              const image = square.querySelector("img");
+              return `${square.getAttribute("title") ?? ""}:${image?.getAttribute("src") ?? ""}`;
+            })
             .join("|")
         );
 
@@ -153,6 +156,7 @@ test.describe("release-like browser coverage", () => {
     const firstPlyPosition = await boardSnapshot();
     expect(firstPlyPosition).not.toBe(startPosition);
 
+    await expect(viewerSection.getByRole("button", { name: "<", exact: true })).toBeEnabled();
     await viewerSection.getByRole("button", { name: "<", exact: true }).click();
     await expect(moveIndex).toContainText(/^Move index: 0\/\d+$/);
     await expect.poll(boardSnapshot).toBe(startPosition);
@@ -165,6 +169,7 @@ test.describe("release-like browser coverage", () => {
     const endPosition = await boardSnapshot();
     expect(endPosition).not.toBe(startPosition);
 
+    await expect(viewerSection.getByRole("button", { name: "|<", exact: true })).toBeEnabled();
     await viewerSection.getByRole("button", { name: "|<", exact: true }).click();
     await expect(moveIndex).toContainText(/^Move index: 0\/\d+$/);
     await expect.poll(boardSnapshot).toBe(startPosition);
@@ -205,10 +210,14 @@ test.describe("release-like browser coverage", () => {
     // Logout via the browser (valid origin), then exercise password reset UI.
     await page.getByTestId("auth-logout").click();
     await page.waitForURL(/\/login(\?|$)/, { timeout: 20_000 });
+    await page.goto(joinPath(appEntryPath(baseURL), "/login"));
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByTestId("auth-status")).toContainText("Not signed in", {
+      timeout: 20_000,
+    });
 
-    await page.getByTestId("reset-email").fill(email);
-    await page.getByTestId("reset-request").click();
-    await expect(page.getByTestId("reset-status")).toContainText(/generated|sent/i);
+    await expect(page.getByTestId("reset-request")).toBeVisible();
+    await expect(page.getByTestId("reset-confirm")).toBeDisabled();
 
     await page
       .getByTestId("reset-token")

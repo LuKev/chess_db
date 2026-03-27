@@ -540,6 +540,7 @@ export default function GamesPage() {
       return;
     }
     toasts.pushToast({ kind: "success", message: "Added games to collection" });
+    await queryClient.invalidateQueries({ queryKey: ["collections"] });
     await queryClient.invalidateQueries({ queryKey: ["games"] });
     clearSelection();
   }
@@ -561,6 +562,7 @@ export default function GamesPage() {
       return;
     }
     toasts.pushToast({ kind: "success", message: "Removed games from collection" });
+    await queryClient.invalidateQueries({ queryKey: ["collections"] });
     await queryClient.invalidateQueries({ queryKey: ["games"] });
     clearSelection();
   }
@@ -582,6 +584,7 @@ export default function GamesPage() {
       return;
     }
     toasts.pushToast({ kind: "success", message: "Tagged games" });
+    await queryClient.invalidateQueries({ queryKey: ["tags"] });
     await queryClient.invalidateQueries({ queryKey: ["games"] });
     clearSelection();
   }
@@ -603,6 +606,7 @@ export default function GamesPage() {
       return;
     }
     toasts.pushToast({ kind: "success", message: "Untagged games" });
+    await queryClient.invalidateQueries({ queryKey: ["tags"] });
     await queryClient.invalidateQueries({ queryKey: ["games"] });
     clearSelection();
   }

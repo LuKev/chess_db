@@ -247,6 +247,14 @@ function moveNoteChunks(note: NormalizedMoveNote, ply: number): string[] {
   return chunks;
 }
 
+function stringifyUnsupportedFallback(
+  unsupportedFallback: Record<string, unknown>
+): string {
+  return Object.entries(unsupportedFallback)
+    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+    .join(" ");
+}
+
 function withAnnotationsComment(
   pgnText: string,
   includeAnnotations: boolean,
@@ -269,6 +277,13 @@ function withAnnotationsComment(
   const { headers, moveText } = splitPgnSections(trimmed);
   const tokens = tokenizeMovetext(moveText);
   const { chunks: rootChunks, unsupportedFallback } = rootAnnotationChunks(annotations);
+  if (Object.keys(unsupportedFallback).length > 0) {
+    rootChunks.push(
+      `{ChessDBAnnotationsUnsupported schema=${schemaVersion ?? 2} ${stringifyUnsupportedFallback(
+        unsupportedFallback
+      )}}`
+    );
+  }
 
   const renderedTokens: string[] = [...rootChunks];
   let mainlinePly = 0;
@@ -299,14 +314,6 @@ function withAnnotationsComment(
       continue;
     }
     renderedTokens.push(...moveNoteChunks(note, mainlinePly));
-  }
-
-  if (Object.keys(unsupportedFallback).length > 0) {
-    renderedTokens.push(
-      `{ChessDBAnnotationsUnsupported schema=${schemaVersion ?? 2} ${JSON.stringify(
-        unsupportedFallback
-      )}}`
-    );
   }
 
   const renderedMoveText = renderedTokens.join(" ").replace(/\s+/g, " ").trim();
