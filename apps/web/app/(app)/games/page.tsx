@@ -78,7 +78,7 @@ const GAME_COLUMNS: GameColumn[] = [
   { id: "whiteElo", label: "White Elo", compact: true },
   { id: "blackElo", label: "Black Elo", compact: true },
   { id: "tags", label: "Tags", defaultVisible: false },
-  { id: "plyCount", label: "Ply", compact: true },
+  { id: "plyCount", label: "Moves", compact: true },
 ];
 
 const DEFAULT_VISIBLE_COLUMNS = GAME_COLUMNS.filter((column) => column.defaultVisible !== false).map((column) => column.id);
@@ -128,7 +128,13 @@ function renderGameCell(game: GameRow, columnId: GameColumnId): { content: React
       return { content: tags, title: tags !== "-" ? tags : undefined };
     }
     case "plyCount":
-      return { content: game.plyCount ?? "-", title: typeof game.plyCount === "number" ? String(game.plyCount) : undefined };
+      if (typeof game.plyCount !== "number") {
+        return { content: "-" };
+      }
+      return {
+        content: Math.ceil(game.plyCount / 2),
+        title: String(Math.ceil(game.plyCount / 2)),
+      };
   }
 }
 
@@ -1042,7 +1048,7 @@ export default function GamesPage() {
                           {column.label}
                         </th>
                       ))}
-                      <th className="games-col-actions" style={{ minWidth: "118px" }}>
+                      <th className="games-col-actions" style={{ minWidth: "88px" }}>
                         Action
                       </th>
                     </tr>
