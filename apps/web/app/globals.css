@@ -284,10 +284,13 @@ button:disabled {
 
 .games-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 360px);
   gap: 12px;
   margin: 14px 0;
   align-items: flex-start;
+}
+
+.games-controls.with-display-panel {
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 360px);
 }
 
 .games-control-stack {
@@ -572,6 +575,39 @@ th {
 .games-col-fixed,
 .games-col-actions {
   white-space: normal;
+}
+
+.games-row-actions {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+
+.games-row-action-button,
+.games-row-action-link {
+  font: inherit;
+  font-size: inherit;
+  line-height: 1.2;
+}
+
+.games-row-action-button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  border-radius: 0;
+  text-align: left;
+}
+
+.games-row-action-button:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.games-row-action-link {
+  color: var(--accent);
 }
 
 .games-col-compact {

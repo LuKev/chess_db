@@ -155,6 +155,7 @@ export default function GamesPage() {
   const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const [columnWidth, setColumnWidth] = useState(DEFAULT_COLUMN_WIDTH);
   const [visibleColumns, setVisibleColumns] = useState<GameColumnId[]>(DEFAULT_VISIBLE_COLUMNS);
+  const [displayControlsOpen, setDisplayControlsOpen] = useState(false);
 
   const queryClient = useQueryClient();
   const toasts = useToasts();
@@ -672,6 +673,9 @@ export default function GamesPage() {
               <button type="button" onClick={() => void games.refetch()} disabled={games.isFetching}>
                 Refresh
               </button>
+              <button type="button" onClick={() => setDisplayControlsOpen((value) => !value)}>
+                {displayControlsOpen ? "Hide display settings" : "Display settings"}
+              </button>
               {viewerGameId ? (
                 <button type="button" onClick={() => setViewerGameId(null)}>
                   Close viewer
@@ -680,7 +684,7 @@ export default function GamesPage() {
             </div>
           </div>
 
-          <div className="games-controls">
+          <div className={`games-controls ${displayControlsOpen ? "with-display-panel" : ""}`}>
             <div className="games-control-stack">
               <section className="games-control-panel">
                 <div className="games-control-head">
@@ -835,76 +839,78 @@ export default function GamesPage() {
               </section>
             </div>
 
-            <aside className="games-control-panel games-display-panel">
-              <div className="games-control-head">
-                <div>
-                  <h3>Display</h3>
-                  <p className="muted">Make the table denser without losing the columns you care about.</p>
+            {displayControlsOpen ? (
+              <aside className="games-control-panel games-display-panel">
+                <div className="games-control-head">
+                  <div>
+                    <h3>Display</h3>
+                    <p className="muted">Make the table denser without losing the columns you care about.</p>
+                  </div>
+                  <button type="button" onClick={() => resetDisplaySettings()}>
+                    Reset display
+                  </button>
                 </div>
-                <button type="button" onClick={() => resetDisplaySettings()}>
-                  Reset display
-                </button>
-              </div>
 
-              <label>
-                Games per page
-                <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
-                  {PAGE_SIZE_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="games-slider-label">
-                  <span>Font size</span>
-                  <span className="games-slider-value">{fontSize}px</span>
-                </span>
-                <input
-                  type="range"
-                  min="12"
-                  max="16"
-                  step="1"
-                  value={fontSize}
-                  onChange={(event) => setFontSize(Number(event.target.value))}
-                />
-              </label>
-              <label>
-                <span className="games-slider-label">
-                  <span>Column width</span>
-                  <span className="games-slider-value">{columnWidth}px</span>
-                </span>
-                <input
-                  type="range"
-                  min="120"
-                  max="260"
-                  step="10"
-                  value={columnWidth}
-                  onChange={(event) => setColumnWidth(Number(event.target.value))}
-                />
-              </label>
+                <label>
+                  Games per page
+                  <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                    {PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span className="games-slider-label">
+                    <span>Font size</span>
+                    <span className="games-slider-value">{fontSize}px</span>
+                  </span>
+                  <input
+                    type="range"
+                    min="12"
+                    max="16"
+                    step="1"
+                    value={fontSize}
+                    onChange={(event) => setFontSize(Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span className="games-slider-label">
+                    <span>Column width</span>
+                    <span className="games-slider-value">{columnWidth}px</span>
+                  </span>
+                  <input
+                    type="range"
+                    min="120"
+                    max="260"
+                    step="10"
+                    value={columnWidth}
+                    onChange={(event) => setColumnWidth(Number(event.target.value))}
+                  />
+                </label>
 
-              <div className="subsection">
-                <div className="section-head">
-                  <strong>Columns</strong>
-                  <span className="muted-small">{visibleTableColumns.length} visible</span>
+                <div className="subsection">
+                  <div className="section-head">
+                    <strong>Columns</strong>
+                    <span className="muted-small">{visibleTableColumns.length} visible</span>
+                  </div>
+                  <div className="games-column-picker">
+                    {GAME_COLUMNS.map((column) => (
+                      <label key={column.id} className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={visibleColumns.includes(column.id)}
+                          onChange={() => toggleVisibleColumn(column.id)}
+                        />
+                        <span>{column.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="muted-small">Selection and action columns stay visible.</p>
                 </div>
-                <div className="games-column-picker">
-                  {GAME_COLUMNS.map((column) => (
-                    <label key={column.id} className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={visibleColumns.includes(column.id)}
-                        onChange={() => toggleVisibleColumn(column.id)}
-                      />
-                      <span>{column.label}</span>
-                    </label>
-                  ))}
-                </div>
-                <p className="muted-small">Selection and action columns stay visible.</p>
-              </div>
-            </aside>
+              </aside>
+            ) : null}
           </div>
 
           <div className="button-row button-row-spaced">
@@ -1065,11 +1071,13 @@ export default function GamesPage() {
                           );
                         })}
                         <td className="games-col-actions">
-                          <div className="button-row">
-                            <button type="button" onClick={() => setViewerGameId(game.id)}>
+                          <div className="games-row-actions">
+                            <button type="button" className="games-row-action-button" onClick={() => setViewerGameId(game.id)}>
                               View
                             </button>
-                            <Link href={`/games/${game.id}`}>Page</Link>
+                            <Link className="games-row-action-link" href={`/games/${game.id}`}>
+                              Page
+                            </Link>
                           </div>
                         </td>
                       </tr>
