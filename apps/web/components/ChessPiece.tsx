@@ -1,4 +1,5 @@
 import type { PieceSymbol } from "chess.js";
+import { addBasePath } from "../lib/basePath";
 
 type ObjectPiece = {
   type: PieceSymbol;
@@ -12,6 +13,7 @@ type ChessPieceProps = {
 type PieceSetName = "alpha" | "uscf" | "wikipedia";
 
 const DEFAULT_PIECE_SET: PieceSetName = "alpha";
+const PIECE_ASSET_ROOT = addBasePath("/pieces");
 
 const PIECE_CODES = new Set(["wP", "wN", "wB", "wR", "wQ", "wK", "bP", "bN", "bB", "bR", "bQ", "bK"]);
 
@@ -56,7 +58,7 @@ export function ChessPiece(props: ChessPieceProps) {
       draggable={false}
       height={45}
       loading="eager"
-      src={`/pieces/${DEFAULT_PIECE_SET}/${pieceCode}.png`}
+      src={`${PIECE_ASSET_ROOT}/${DEFAULT_PIECE_SET}/${pieceCode}.png`}
       width={45}
     />
   );

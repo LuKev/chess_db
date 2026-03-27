@@ -21,6 +21,11 @@ export function stripBasePath(path: string): string {
   return stripKnownBasePath(path, basePath);
 }
 
+export function addBasePath(path: string): string {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `${basePath}${normalized}` || normalized;
+}
+
 export function stripAppBasePath(path: string): string {
   // Defensive: production can be served under /chess_db (Cloudflare) even if the app is also
   // reachable at /. Keep next redirects basePath-relative to avoid /chess_db/chess_db/... 404s.

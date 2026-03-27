@@ -38,4 +38,16 @@ test.describe("viewer demo ui", () => {
 
     await board.screenshot({ path: "test-results/viewer-demo-board.png" });
   });
+
+  test("piece image urls respect the app base path", async ({ page, baseURL }) => {
+    await page.goto(joinPath(appEntryPath(baseURL), "/viewer-demo"));
+
+    const firstPiece = await page
+      .getByTestId("viewer-demo-board")
+      .locator(".square img")
+      .first()
+      .evaluate((el) => new URL((el as HTMLImageElement).src).pathname);
+
+    expect(firstPiece).toBe(joinPath(appEntryPath(baseURL), "/pieces/alpha/bR.png"));
+  });
 });
