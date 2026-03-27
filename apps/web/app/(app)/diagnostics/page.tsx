@@ -2,6 +2,7 @@
 
 import { Chess } from "chess.js";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChessPiece } from "../../../components/ChessPiece";
 
 type User = {
   id: number;
@@ -535,25 +536,6 @@ function fenToBoard(fen: string): string[][] {
     }
     return squares;
   });
-}
-
-function pieceToSymbol(piece: string): string {
-  const map: Record<string, string> = {
-    p: "♟",
-    r: "♜",
-    n: "♞",
-    b: "♝",
-    q: "♛",
-    k: "♚",
-    P: "♙",
-    R: "♖",
-    N: "♘",
-    B: "♗",
-    Q: "♕",
-    K: "♔",
-  };
-
-  return map[piece] ?? "";
 }
 
 function emptyFenBoard(): string[][] {
@@ -3411,7 +3393,7 @@ export default function Home() {
                           className={`square ${(rankIndex + fileIndex) % 2 === 0 ? "light" : "dark"} ${isMarked ? "marked" : ""}`}
                           title={squareName}
                         >
-                          {pieceToSymbol(piece)}
+                          <ChessPiece piece={piece} />
                         </div>
                       );
                     })}
@@ -3903,7 +3885,7 @@ export default function Home() {
                         setFenEditorSquare(rankIndex, fileIndex, nextPiece);
                       }}
                     >
-                      {pieceToSymbol(piece)}
+                      <ChessPiece piece={piece} />
                     </button>
                   );
                 })}
@@ -3924,7 +3906,7 @@ export default function Home() {
                   }}
                   onClick={() => setFenEditorSelectedPiece(piece)}
                 >
-                  <span>{piece ? pieceToSymbol(piece) : "⌫"}</span>
+                  <span>{piece ? <ChessPiece piece={piece} /> : "⌫"}</span>
                   <small>{piece || "Clear"}</small>
                 </button>
               ))}

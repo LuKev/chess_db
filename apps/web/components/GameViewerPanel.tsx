@@ -4,6 +4,7 @@ import { Chess, type PieceSymbol } from "chess.js";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ChessPiece } from "./ChessPiece";
 import { fetchJson } from "../lib/api";
 import { extractMainlineSans } from "../lib/chess/moveTree";
 
@@ -28,28 +29,6 @@ type BoardSquare = {
   square: string;
   piece: { type: PieceSymbol; color: "w" | "b" } | null;
 };
-
-function pieceToSymbol(piece: { type: PieceSymbol; color: "w" | "b" } | null): string {
-  if (!piece) {
-    return "";
-  }
-  const key = `${piece.color}${piece.type}`;
-  const map: Record<string, string> = {
-    wp: "♙",
-    wn: "♘",
-    wb: "♗",
-    wr: "♖",
-    wq: "♕",
-    wk: "♔",
-    bp: "♟",
-    bn: "♞",
-    bb: "♝",
-    br: "♜",
-    bq: "♛",
-    bk: "♚",
-  };
-  return map[key] ?? "";
-}
 
 function buildBoard(chess: Chess): BoardSquare[][] {
   const board = chess.board();
@@ -193,7 +172,7 @@ export function GameViewerPanel(props: { gameId: number; onClose?: () => void })
                     className={`square ${(rankIndex + "abcdefgh".indexOf(sq.square[0]!)) % 2 === 0 ? "light" : "dark"}`}
                     title={sq.square}
                   >
-                    {pieceToSymbol(sq.piece)}
+                    <ChessPiece piece={sq.piece} />
                   </div>
                 ))}
               </div>

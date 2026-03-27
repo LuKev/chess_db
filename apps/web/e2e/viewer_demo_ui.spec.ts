@@ -15,7 +15,7 @@ function joinPath(base: string, suffix: string): string {
 }
 
 test.describe("viewer demo ui", () => {
-  test("pieces are not tiny relative to squares", async ({ page, baseURL }) => {
+  test("piece images fill squares at a readable size", async ({ page, baseURL }) => {
     await page.setViewportSize({ width: 1100, height: 780 });
     await page.goto(joinPath(appEntryPath(baseURL), "/viewer-demo"));
 
@@ -24,19 +24,18 @@ test.describe("viewer demo ui", () => {
 
     const metrics = await board.locator(".square").first().evaluate((el) => {
       const rect = el.getBoundingClientRect();
-      const fontSize = Number.parseFloat(window.getComputedStyle(el).fontSize || "0");
+      const piece = el.querySelector("img");
+      const pieceRect = piece?.getBoundingClientRect();
       return {
         squareHeight: rect.height,
-        fontSize,
-        ratio: rect.height > 0 ? fontSize / rect.height : 0,
+        pieceHeight: pieceRect?.height ?? 0,
+        ratio: rect.height > 0 ? (pieceRect?.height ?? 0) / rect.height : 0,
       };
     });
 
-    // Regression test: historically the pieces were too small (e.g. 18px font in ~40-50px squares).
-    expect(metrics.fontSize).toBeGreaterThanOrEqual(24);
-    expect(metrics.ratio).toBeGreaterThanOrEqual(0.55);
+    expect(metrics.pieceHeight).toBeGreaterThanOrEqual(28);
+    expect(metrics.ratio).toBeGreaterThanOrEqual(0.7);
 
     await board.screenshot({ path: "test-results/viewer-demo-board.png" });
   });
 });
-

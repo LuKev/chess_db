@@ -330,9 +330,15 @@ button:disabled {
   aspect-ratio: 1 / 1;
   display: grid;
   place-items: center;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: clamp(24px, 8vw, 44px);
   line-height: 1;
+}
+
+.piece-image {
+  width: 82%;
+  height: 82%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
 }
 
 .square.light {

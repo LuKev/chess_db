@@ -3,33 +3,12 @@
 import { Chess, type PieceSymbol } from "chess.js";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { ChessPiece } from "../../../components/ChessPiece";
 
 type BoardSquare = {
   square: string;
   piece: { type: PieceSymbol; color: "w" | "b" } | null;
 };
-
-function pieceToSymbol(piece: { type: PieceSymbol; color: "w" | "b" } | null): string {
-  if (!piece) {
-    return "";
-  }
-  const key = `${piece.color}${piece.type}`;
-  const map: Record<string, string> = {
-    wp: "♙",
-    wn: "♘",
-    wb: "♗",
-    wr: "♖",
-    wq: "♕",
-    wk: "♔",
-    bp: "♟",
-    bn: "♞",
-    bb: "♝",
-    br: "♜",
-    bq: "♛",
-    bk: "♚",
-  };
-  return map[key] ?? "";
-}
 
 function buildBoard(chess: Chess): BoardSquare[][] {
   const board = chess.board();
@@ -156,7 +135,7 @@ export default function ViewerDemoPage() {
                       className={`square ${(rankIndex + "abcdefgh".indexOf(sq.square[0]!)) % 2 === 0 ? "light" : "dark"}`}
                       title={sq.square}
                     >
-                      {pieceToSymbol(sq.piece)}
+                      <ChessPiece piece={sq.piece} />
                     </div>
                   ))}
                 </div>
@@ -203,4 +182,3 @@ export default function ViewerDemoPage() {
     </main>
   );
 }
-
