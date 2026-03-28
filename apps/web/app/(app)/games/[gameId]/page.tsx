@@ -129,6 +129,41 @@ type GameAnalysisJobsResponse = {
   items: GameAnalysisJob[];
 };
 
+type AutoAnnotationJob = {
+  id: number;
+  status: string;
+  engine: string;
+  depth: number | null;
+  timeMs: number | null;
+  processedPlies: number;
+  annotatedPlies: number;
+  overwriteExisting: boolean;
+  cancelRequested: boolean;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AutoAnnotationJobsResponse = {
+  gameId: number;
+  items: AutoAnnotationJob[];
+};
+
+type RepertoireItem = {
+  id: number;
+  name: string;
+  description: string | null;
+  orientation: "white" | "black" | "either";
+  entryCount: number;
+  practicedCount: number;
+  isPublic: boolean;
+  shareToken: string;
+};
+
+type RepertoireListResponse = {
+  items: RepertoireItem[];
+};
+
 type BoardSquare = {
   square: string;
   piece: { type: PieceSymbol; color: "w" | "b" } | null;
@@ -286,6 +321,20 @@ function pvSanText(fen: string, pv: string | null): string {
   }
 }
 
+function uciFromSan(fen: string, san: string): string | null {
+  try {
+    const chess = new Chess();
+    chess.load(fen);
+    const move = chess.move(san, { strict: false });
+    if (!move) {
+      return null;
+    }
+    return `${move.from}${move.to}${move.promotion ?? ""}`.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 export default function GameViewerPage() {
   const params = useParams<{ gameId: string }>();
   const gameId = Number(params.gameId);
@@ -305,6 +354,9 @@ export default function GameViewerPage() {
   const [gameAnalysisStartPly, setGameAnalysisStartPly] = useState(0);
   const [gameAnalysisEndPly, setGameAnalysisEndPly] = useState("");
   const [gameAnalysisStatus, setGameAnalysisStatus] = useState("No background game analysis yet.");
+  const [autoAnnotationOverwrite, setAutoAnnotationOverwrite] = useState(false);
+  const [autoAnnotationStatus, setAutoAnnotationStatus] = useState("No automated annotation job yet.");
+  const [selectedRepertoireId, setSelectedRepertoireId] = useState<number | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -413,6 +465,40 @@ export default function GameViewerPage() {
     },
   });
 
+  const autoAnnotationJobs = useQuery({
+    queryKey: ["auto-annotation-jobs", { gameId }],
+    enabled: Number.isFinite(gameId) && gameId > 0,
+    refetchInterval: 2000,
+    queryFn: async (): Promise<AutoAnnotationJobsResponse> => {
+      const response = await fetchJson<AutoAnnotationJobsResponse>(`/api/games/${gameId}/auto-annotations`, {
+        method: "GET",
+      });
+      if (response.status === 200 && "items" in response.data) {
+        return response.data;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load auto annotation jobs (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
+  const repertoires = useQuery({
+    queryKey: ["repertoires"],
+    queryFn: async (): Promise<RepertoireItem[]> => {
+      const response = await fetchJson<RepertoireListResponse>("/api/repertoires", { method: "GET" });
+      if (response.status === 200 && "items" in response.data) {
+        return response.data.items;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load repertoires (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
   useEffect(() => {
     const runningJob = gameAnalysisJobs.data?.items.find(
       (job) => job.status === "queued" || job.status === "running"
@@ -436,6 +522,48 @@ export default function GameViewerPage() {
       }
     }
   }, [gameAnalysisJobs.data]);
+
+  useEffect(() => {
+    const runningJob = autoAnnotationJobs.data?.items.find(
+      (job) => job.status === "queued" || job.status === "running"
+    );
+    const latestJob = autoAnnotationJobs.data?.items[0];
+    if (runningJob) {
+      setAutoAnnotationStatus(
+        `Auto annotation #${runningJob.id} ${runningJob.status}: ${runningJob.processedPlies} processed, ${runningJob.annotatedPlies} annotated.`
+      );
+      return;
+    }
+    if (latestJob) {
+      if (latestJob.status === "completed") {
+        setAutoAnnotationStatus(
+          `Latest auto annotation #${latestJob.id} completed with ${latestJob.annotatedPlies} annotated plies.`
+        );
+      } else if (latestJob.status === "failed") {
+        setAutoAnnotationStatus(`Auto annotation #${latestJob.id} failed: ${latestJob.error ?? "unknown error"}`);
+      } else if (latestJob.status === "cancelled") {
+        setAutoAnnotationStatus(`Auto annotation #${latestJob.id} cancelled.`);
+      }
+    }
+  }, [autoAnnotationJobs.data]);
+
+  useEffect(() => {
+    const latestJob = autoAnnotationJobs.data?.items[0];
+    if (latestJob?.status === "completed") {
+      void queryClient.invalidateQueries({ queryKey: ["annotations", { gameId }] });
+    }
+  }, [autoAnnotationJobs.data, gameId, queryClient]);
+
+  useEffect(() => {
+    if (!repertoires.data || repertoires.data.length === 0) {
+      setSelectedRepertoireId(null);
+      return;
+    }
+    if (selectedRepertoireId && repertoires.data.some((item) => item.id === selectedRepertoireId)) {
+      return;
+    }
+    setSelectedRepertoireId(repertoires.data[0].id);
+  }, [repertoires.data, selectedRepertoireId]);
 
   useEffect(() => {
     if (!analysisRequestId) {
@@ -519,6 +647,9 @@ export default function GameViewerPage() {
   const activeArrows = parseTextList(activeMoveNote.arrowsText).map((value) => value.toLowerCase());
   const activeArrowPairs = parseBoardArrows(activeArrows);
   const savedMoveNotes = annotations.data?.moveNotes ?? {};
+  const nextGameMoveSan = derived.history[derived.safeCursor] ?? null;
+  const nextGameMoveUci = nextGameMoveSan ? uciFromSan(derived.fen, nextGameMoveSan) : null;
+  const selectedRepertoire = repertoires.data?.find((item) => item.id === selectedRepertoireId) ?? null;
 
   async function runAnalysis(): Promise<void> {
     if (!derived.fen) {
@@ -647,6 +778,76 @@ export default function GameViewerPage() {
     }
     setGameAnalysisStatus(`Game analysis #${jobId} ${response.data.status}.`);
     await gameAnalysisJobs.refetch();
+  }
+
+  async function queueAutoAnnotation(): Promise<void> {
+    setAutoAnnotationStatus("Queueing automated annotations...");
+    const response = await fetchJson<{ id: number; status: string }>(`/api/games/${gameId}/auto-annotations`, {
+      method: "POST",
+      body: JSON.stringify({
+        depth: analysisDepth,
+        overwriteExisting: autoAnnotationOverwrite,
+      }),
+    });
+    if (response.status !== 201 || !("id" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to queue auto annotations (status ${response.status})`;
+      setAutoAnnotationStatus(msg);
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    setAutoAnnotationStatus(`Queued auto annotation job #${response.data.id}.`);
+    toasts.pushToast({ kind: "success", message: `Queued auto annotation #${response.data.id}` });
+    await autoAnnotationJobs.refetch();
+  }
+
+  async function cancelAutoAnnotation(jobId: number): Promise<void> {
+    const response = await fetchJson<{ id: number; status: string }>(
+      `/api/games/${gameId}/auto-annotations/${jobId}/cancel`,
+      { method: "POST" }
+    );
+    if (response.status !== 200 || !("status" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to cancel auto annotation job (status ${response.status})`;
+      setAutoAnnotationStatus(msg);
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    setAutoAnnotationStatus(`Auto annotation #${jobId} ${response.data.status}.`);
+    await autoAnnotationJobs.refetch();
+  }
+
+  async function addMoveToRepertoire(moveUci: string | null, note?: string): Promise<void> {
+    if (!selectedRepertoireId) {
+      toasts.pushToast({ kind: "error", message: "Choose a repertoire first" });
+      return;
+    }
+    if (!derived.fen || !moveUci) {
+      toasts.pushToast({ kind: "error", message: "No move available for this position" });
+      return;
+    }
+    const response = await fetchJson<{ id: number }>(`/api/repertoires/${selectedRepertoireId}/entries`, {
+      method: "POST",
+      body: JSON.stringify({
+        positionFen: derived.fen,
+        moveUci,
+        note: note?.trim() || undefined,
+      }),
+    });
+    if (response.status !== 201) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to add move to repertoire (status ${response.status})`;
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    toasts.pushToast({ kind: "success", message: "Move added to repertoire" });
+    await queryClient.invalidateQueries({ queryKey: ["repertoires"] });
   }
 
   async function saveAnnotations(): Promise<void> {
@@ -946,6 +1147,135 @@ export default function GameViewerPage() {
 
       <section className="card">
         <div className="section-head">
+          <h2>Repertoire</h2>
+          <div className="button-row">
+            <Link href="/repertoires">Manage repertoires</Link>
+            {selectedRepertoire ? <Link href={`/drill?repertoireId=${selectedRepertoire.id}`}>Drill</Link> : null}
+          </div>
+        </div>
+        <div className="auth-grid">
+          <label>
+            Target repertoire
+            <select
+              value={selectedRepertoireId ?? ""}
+              onChange={(event) => setSelectedRepertoireId(event.target.value ? Number(event.target.value) : null)}
+            >
+              <option value="">Select a repertoire</option>
+              {(repertoires.data ?? []).map((repertoire) => (
+                <option key={repertoire.id} value={repertoire.id}>
+                  {repertoire.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Current move from game
+            <input value={nextGameMoveSan ?? "No next move at this cursor"} readOnly />
+          </label>
+          <div className="button-row" style={{ alignSelf: "end" }}>
+            <button
+              type="button"
+              onClick={() => void addMoveToRepertoire(nextGameMoveUci, nextGameMoveSan ? `From game ${game.data?.white ?? ""} vs ${game.data?.black ?? ""}` : undefined)}
+              disabled={!selectedRepertoireId || !nextGameMoveUci}
+            >
+              Add next game move
+            </button>
+          </div>
+        </div>
+        {selectedRepertoire ? (
+          <p className="muted">
+            {selectedRepertoire.name}: {selectedRepertoire.entryCount} entries, {selectedRepertoire.practicedCount} practiced.
+            {selectedRepertoire.isPublic ? " Published." : ""}
+          </p>
+        ) : (
+          <p className="muted">Create a repertoire or select one to save current moves and engine suggestions.</p>
+        )}
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Automated Annotation</h2>
+          <div className="button-row">
+            <button type="button" onClick={() => void queueAutoAnnotation()} disabled={!game.data}>
+              Analyze and annotate
+            </button>
+            <button type="button" onClick={() => void autoAnnotationJobs.refetch()} disabled={autoAnnotationJobs.isFetching}>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div className="auth-grid">
+          <label>
+            Annotation depth
+            <input
+              type="number"
+              min={8}
+              max={30}
+              value={String(analysisDepth)}
+              onChange={(event) => setAnalysisDepth(Math.max(8, Math.min(30, Number(event.target.value) || 14)))}
+            />
+          </label>
+          <label>
+            Overwrite existing notes
+            <select
+              value={autoAnnotationOverwrite ? "yes" : "no"}
+              onChange={(event) => setAutoAnnotationOverwrite(event.target.value === "yes")}
+            >
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </label>
+        </div>
+        <p className="muted">{autoAnnotationStatus}</p>
+        {autoAnnotationJobs.data ? (
+          <div className="table-wrap">
+            <table style={{ minWidth: 900 }}>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Status</th>
+                  <th>Depth</th>
+                  <th>Progress</th>
+                  <th>Overwrite</th>
+                  <th>Updated</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {autoAnnotationJobs.data.items.map((job) => (
+                  <tr key={job.id}>
+                    <td>{job.id}</td>
+                    <td>{job.status}</td>
+                    <td>{job.depth ?? "-"}</td>
+                    <td>
+                      {job.annotatedPlies}/{job.processedPlies}
+                    </td>
+                    <td>{job.overwriteExisting ? "Yes" : "No"}</td>
+                    <td>{new Date(job.updatedAt).toLocaleString()}</td>
+                    <td>
+                      {(job.status === "queued" || job.status === "running") ? (
+                        <button type="button" onClick={() => void cancelAutoAnnotation(job.id)}>
+                          Cancel
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {autoAnnotationJobs.data.items.length === 0 ? (
+                  <tr>
+                    <td colSpan={7}>No automated annotation jobs yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="card">
+        <div className="section-head">
           <h2>Saved Engine Lines (This Ply)</h2>
           <div className="button-row">
             <button type="button" onClick={() => void engineLines.refetch()} disabled={engineLines.isFetching}>
@@ -968,6 +1298,7 @@ export default function GameViewerPage() {
                   <th>PV (SAN)</th>
                   <th>Source</th>
                   <th>Created</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -985,11 +1316,20 @@ export default function GameViewerPage() {
                     </td>
                     <td>{line.source}</td>
                     <td>{new Date(line.createdAt).toLocaleString()}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => void addMoveToRepertoire(line.pvUci[0] ?? null, `Saved engine line ${line.id}`)}
+                        disabled={!selectedRepertoireId || !(line.pvUci[0] ?? null)}
+                      >
+                        Add to repertoire
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {engineLines.data.items.length === 0 ? (
                   <tr>
-                    <td colSpan={8}>No saved lines at this ply.</td>
+                    <td colSpan={9}>No saved lines at this ply.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -1055,6 +1395,7 @@ export default function GameViewerPage() {
                   <th>Eval</th>
                   <th>PV</th>
                   <th />
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -1069,11 +1410,20 @@ export default function GameViewerPage() {
                         Store line
                       </button>
                     </td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => void addMoveToRepertoire(line.bestMove, `Engine PV ${line.multipv}`)}
+                        disabled={!selectedRepertoireId || !line.bestMove}
+                      >
+                        Add to repertoire
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {analysisResult.result.lines.length === 0 ? (
                   <tr>
-                    <td colSpan={5}>No principal variations returned yet.</td>
+                    <td colSpan={6}>No principal variations returned yet.</td>
                   </tr>
                 ) : null}
               </tbody>

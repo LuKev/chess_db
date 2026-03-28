@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { requireUser } from "../auth.js";
-import type { AnalysisQueue, GameAnalysisQueue } from "../infrastructure/queue.js";
+import type { AnalysisQueue, AutoAnnotationQueue, GameAnalysisQueue } from "../infrastructure/queue.js";
 import { normalizeFen } from "../chess/fen.js";
 import { parseIdempotencyKey } from "../http/idempotency.js";
 
@@ -45,6 +45,13 @@ const CreateGameAnalysisSchema = z.object({
   endPly: z.number().int().min(0).optional(),
 });
 
+const CreateAutoAnnotationSchema = z.object({
+  depth: z.number().int().min(1).max(30).default(14),
+  timeMs: z.number().int().positive().max(60_000).optional(),
+  engine: z.string().trim().min(1).max(64).default("stockfish"),
+  overwriteExisting: z.boolean().default(false),
+});
+
 function toId(value: number | string): number {
   if (typeof value === "number") {
     return value;
@@ -56,7 +63,8 @@ export async function registerAnalysisRoutes(
   app: FastifyInstance,
   pool: Pool,
   queue: AnalysisQueue,
-  gameAnalysisQueue: GameAnalysisQueue
+  gameAnalysisQueue: GameAnalysisQueue,
+  autoAnnotationQueue: AutoAnnotationQueue
 ): Promise<void> {
   const parseResultLines = (
     raw: unknown,
@@ -909,6 +917,158 @@ export async function registerAnalysisRoutes(
 
       return {
         id: gameAnalysisJobId,
+        status: result.rows[0].status,
+      };
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/games/:id/auto-annotations",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      if (!Number.isInteger(gameId) || gameId <= 0) {
+        return reply.status(400).send({ error: "Invalid game id" });
+      }
+      const parsed = CreateAutoAnnotationSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten(),
+        });
+      }
+      const gameOwnership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [gameId, request.user!.id]
+      );
+      if (!gameOwnership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+
+      const created = await pool.query<{ id: number | string }>(
+        `INSERT INTO auto_annotation_jobs (
+          user_id, game_id, status, engine, depth, time_ms, overwrite_existing
+        ) VALUES (
+          $1, $2, 'queued', $3, $4, $5, $6
+        )
+        RETURNING id`,
+        [
+          request.user!.id,
+          gameId,
+          parsed.data.engine,
+          parsed.data.depth,
+          parsed.data.timeMs ?? null,
+          parsed.data.overwriteExisting,
+        ]
+      );
+      const autoAnnotationJobId = toId(created.rows[0].id);
+      try {
+        await autoAnnotationQueue.enqueueAutoAnnotation({
+          autoAnnotationJobId,
+          userId: request.user!.id,
+        });
+      } catch (error) {
+        request.log.error(error);
+        await pool.query(
+          `UPDATE auto_annotation_jobs
+           SET status = 'failed',
+               error_message = 'Failed to enqueue auto annotation job',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [autoAnnotationJobId]
+        );
+        return reply.status(500).send({ error: "Failed to enqueue auto annotation job" });
+      }
+      return reply.status(201).send({
+        id: autoAnnotationJobId,
+        status: "queued",
+      });
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/games/:id/auto-annotations",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      if (!Number.isInteger(gameId) || gameId <= 0) {
+        return reply.status(400).send({ error: "Invalid game id" });
+      }
+      const gameOwnership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [gameId, request.user!.id]
+      );
+      if (!gameOwnership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+      const result = await pool.query<{
+        id: number | string;
+        status: string;
+        engine: string;
+        depth: number | null;
+        time_ms: number | null;
+        processed_plies: number;
+        annotated_plies: number;
+        overwrite_existing: boolean;
+        cancel_requested: boolean;
+        error_message: string | null;
+        created_at: Date;
+        updated_at: Date;
+      }>(
+        `SELECT
+          id, status, engine, depth, time_ms, processed_plies, annotated_plies,
+          overwrite_existing, cancel_requested, error_message, created_at, updated_at
+         FROM auto_annotation_jobs
+         WHERE game_id = $1 AND user_id = $2
+         ORDER BY id DESC
+         LIMIT 20`,
+        [gameId, request.user!.id]
+      );
+      return {
+        gameId,
+        items: result.rows.map((row) => ({
+          id: toId(row.id),
+          status: row.status,
+          engine: row.engine,
+          depth: row.depth,
+          timeMs: row.time_ms,
+          processedPlies: row.processed_plies,
+          annotatedPlies: row.annotated_plies,
+          overwriteExisting: row.overwrite_existing,
+          cancelRequested: row.cancel_requested,
+          error: row.error_message,
+          createdAt: row.created_at.toISOString(),
+          updatedAt: row.updated_at.toISOString(),
+        })),
+      };
+    }
+  );
+
+  app.post<{ Params: { id: string; jobId: string } }>(
+    "/api/games/:id/auto-annotations/:jobId/cancel",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      const autoAnnotationJobId = Number(request.params.jobId);
+      if (!Number.isInteger(gameId) || gameId <= 0 || !Number.isInteger(autoAnnotationJobId) || autoAnnotationJobId <= 0) {
+        return reply.status(400).send({ error: "Invalid auto annotation job id" });
+      }
+      const result = await pool.query<{ status: string }>(
+        `UPDATE auto_annotation_jobs
+         SET cancel_requested = TRUE,
+             status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
+             updated_at = NOW()
+         WHERE id = $1
+           AND game_id = $2
+           AND user_id = $3
+         RETURNING status`,
+        [autoAnnotationJobId, gameId, request.user!.id]
+      );
+      if (!result.rowCount) {
+        return reply.status(404).send({ error: "Auto annotation job not found" });
+      }
+      return {
+        id: autoAnnotationJobId,
         status: result.rows[0].status,
       };
     }

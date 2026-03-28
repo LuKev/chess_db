@@ -20,6 +20,8 @@ const NAV: NavItem[] = [
   { section: "Search", href: "/search/position", label: "Position Search" },
   { section: "Explore", href: "/openings", label: "Opening Explorer" },
   { section: "Explore", href: "/reports", label: "Prep Reports" },
+  { section: "Prep", href: "/repertoires", label: "Repertoires" },
+  { section: "Prep", href: "/drill", label: "Drill" },
   { section: "Organize", href: "/collections", label: "Collections" },
   { section: "Organize", href: "/tags", label: "Tags" },
   { section: "Organize", href: "/filters", label: "Saved Filters" },

@@ -7,6 +7,7 @@ export const EXPORT_QUEUE_NAME = "exports";
 export const POSITION_BACKFILL_QUEUE_NAME = "position_backfill";
 export const OPENING_BACKFILL_QUEUE_NAME = "opening_aggregate_backfill";
 export const GAME_ANALYSIS_QUEUE_NAME = "game_analysis";
+export const AUTO_ANNOTATION_QUEUE_NAME = "auto_annotation";
 
 export type ImportJobPayload = {
   importJobId: number;
@@ -48,6 +49,16 @@ export type GameAnalysisQueue = {
   close(): Promise<void>;
 };
 
+export type AutoAnnotationJobPayload = {
+  autoAnnotationJobId: number;
+  userId: number;
+};
+
+export type AutoAnnotationQueue = {
+  enqueueAutoAnnotation(payload: AutoAnnotationJobPayload): Promise<void>;
+  close(): Promise<void>;
+};
+
 export type PositionBackfillPayload = {
   userId: number;
 };
@@ -72,6 +83,7 @@ const EXPORT_JOB_NAME = "export" as const;
 const POSITION_BACKFILL_JOB_NAME = "position-backfill" as const;
 const OPENING_BACKFILL_JOB_NAME = "opening-backfill" as const;
 const GAME_ANALYSIS_JOB_NAME = "game-analysis" as const;
+const AUTO_ANNOTATION_JOB_NAME = "auto-annotation" as const;
 
 function bullmqConnection(config: AppConfig) {
   // Avoid passing ioredis instances into BullMQ. In some deployment layouts (e.g. isolated installs),
@@ -164,6 +176,30 @@ export function createGameAnalysisQueue(config: AppConfig): GameAnalysisQueue {
     async enqueueGameAnalysis(payload: GameAnalysisJobPayload): Promise<void> {
       await queue.add(GAME_ANALYSIS_JOB_NAME, payload, {
         jobId: `game-analysis-${payload.gameAnalysisJobId}`,
+        attempts: config.queueJobAttempts,
+        backoff: {
+          type: "exponential",
+          delay: config.queueJobBackoffMs,
+        },
+        removeOnComplete: 200,
+        removeOnFail: 200,
+      });
+    },
+    async close(): Promise<void> {
+      await queue.close();
+    },
+  };
+}
+
+export function createAutoAnnotationQueue(config: AppConfig): AutoAnnotationQueue {
+  const queue = new Queue<AutoAnnotationJobPayload>(AUTO_ANNOTATION_QUEUE_NAME, {
+    connection: bullmqConnection(config),
+  });
+
+  return {
+    async enqueueAutoAnnotation(payload: AutoAnnotationJobPayload): Promise<void> {
+      await queue.add(AUTO_ANNOTATION_JOB_NAME, payload, {
+        jobId: `auto-annotation-${payload.autoAnnotationJobId}`,
         attempts: config.queueJobAttempts,
         backoff: {
           type: "exponential",

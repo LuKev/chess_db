@@ -10,6 +10,8 @@ type CollectionItem = {
   id: number;
   name: string;
   description: string | null;
+  shareToken: string;
+  isPublic: boolean;
   gameCount: number;
   createdAt: string;
   updatedAt: string;
@@ -45,6 +47,22 @@ export default function CollectionsPage() {
     setName("");
     setDescription("");
     setEditingId(null);
+  }
+
+  function shareLink(token: string): string {
+    if (typeof window === "undefined") {
+      return `/shared/collections/${token}`;
+    }
+    return `${window.location.origin}/shared/collections/${token}`;
+  }
+
+  async function copyShareLink(token: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(shareLink(token));
+      toasts.pushToast({ kind: "success", message: "Share link copied" });
+    } catch {
+      toasts.pushToast({ kind: "error", message: "Failed to copy share link" });
+    }
   }
 
   async function createCollection(): Promise<void> {
@@ -103,6 +121,28 @@ export default function CollectionsPage() {
       return;
     }
     toasts.pushToast({ kind: "success", message: "Collection deleted" });
+    await queryClient.invalidateQueries({ queryKey: ["collections"] });
+  }
+
+  async function togglePublic(collection: CollectionItem): Promise<void> {
+    const response = await fetchJson<CollectionItem>(`/api/collections/${collection.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        isPublic: !collection.isPublic,
+      }),
+    });
+    if (response.status !== 200 || !("isPublic" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to update collection publishing (status ${response.status})`;
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    toasts.pushToast({
+      kind: "success",
+      message: response.data.isPublic ? "Collection published" : "Collection unpublished",
+    });
     await queryClient.invalidateQueries({ queryKey: ["collections"] });
   }
 
@@ -172,6 +212,7 @@ export default function CollectionsPage() {
                   <th>Name</th>
                   <th>Description</th>
                   <th>Games</th>
+                  <th>Published</th>
                   <th>Updated</th>
                   <th>Action</th>
                 </tr>
@@ -183,6 +224,7 @@ export default function CollectionsPage() {
                     <td>{collection.name}</td>
                     <td>{collection.description ?? "-"}</td>
                     <td>{collection.gameCount}</td>
+                    <td>{collection.isPublic ? "Yes" : "No"}</td>
                     <td>{new Date(collection.updatedAt).toLocaleString()}</td>
                     <td>
                       <div className="button-row">
@@ -190,6 +232,17 @@ export default function CollectionsPage() {
                         <Link href={`/reports?collectionId=${collection.id}&title=${encodeURIComponent(collection.name)}`}>
                           Report
                         </Link>
+                        {collection.isPublic ? (
+                          <>
+                            <Link href={`/shared/collections/${collection.shareToken}`}>Public view</Link>
+                            <button type="button" onClick={() => void copyShareLink(collection.shareToken)}>
+                              Copy link
+                            </button>
+                          </>
+                        ) : null}
+                        <button type="button" onClick={() => void togglePublic(collection)}>
+                          {collection.isPublic ? "Unpublish" : "Publish"}
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
@@ -209,7 +262,7 @@ export default function CollectionsPage() {
                 ))}
                 {collections.data.length === 0 ? (
                   <tr>
-                    <td colSpan={6}>No collections yet.</td>
+                    <td colSpan={7}>No collections yet.</td>
                   </tr>
                 ) : null}
               </tbody>

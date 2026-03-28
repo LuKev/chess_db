@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
@@ -11,6 +12,7 @@ const CreateCollectionSchema = z.object({
 const UpdateCollectionSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   description: z.string().trim().max(500).nullable().optional(),
+  isPublic: z.boolean().optional(),
 });
 
 const CollectionGamesSchema = z.object({
@@ -22,6 +24,10 @@ function toId(value: number | string): number {
     return value;
   }
   return Number(value);
+}
+
+function createShareToken(): string {
+  return randomBytes(12).toString("hex");
 }
 
 async function assertCollectionOwnership(
@@ -49,35 +55,47 @@ export async function registerCollectionRoutes(
       });
     }
 
-    try {
-      const result = await pool.query<{
-        id: number | string;
-        name: string;
-        description: string | null;
-        created_at: Date;
-        updated_at: Date;
-      }>(
-        `INSERT INTO collections (user_id, name, description)
-         VALUES ($1, $2, $3)
-         RETURNING id, name, description, created_at, updated_at`,
-        [request.user!.id, parsed.data.name, parsed.data.description ?? null]
-      );
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await pool.query<{
+          id: number | string;
+          name: string;
+          description: string | null;
+          share_token: string;
+          is_public: boolean;
+          created_at: Date;
+          updated_at: Date;
+        }>(
+          `INSERT INTO collections (user_id, name, description, share_token)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, name, description, share_token, is_public, created_at, updated_at`,
+          [request.user!.id, parsed.data.name, parsed.data.description ?? null, createShareToken()]
+        );
 
-      const row = result.rows[0];
-      return reply.status(201).send({
-        id: toId(row.id),
-        name: row.name,
-        description: row.description,
-        createdAt: row.created_at.toISOString(),
-        updatedAt: row.updated_at.toISOString(),
-      });
-    } catch (error) {
-      if ((error as { code?: string }).code === "23505") {
-        return reply.status(409).send({ error: "Collection name already exists" });
+        const row = result.rows[0];
+        return reply.status(201).send({
+          id: toId(row.id),
+          name: row.name,
+          description: row.description,
+          shareToken: row.share_token,
+          isPublic: row.is_public,
+          createdAt: row.created_at.toISOString(),
+          updatedAt: row.updated_at.toISOString(),
+        });
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+          const detail = String((error as { detail?: string }).detail ?? "");
+          if (detail.includes("(user_id, name)")) {
+            return reply.status(409).send({ error: "Collection name already exists" });
+          }
+          continue;
+        }
+        request.log.error(error);
+        return reply.status(500).send({ error: "Failed to create collection" });
       }
-      request.log.error(error);
-      return reply.status(500).send({ error: "Failed to create collection" });
     }
+
+    return reply.status(500).send({ error: "Failed to allocate collection share token" });
   });
 
   app.get("/api/collections", { preHandler: requireUser }, async (request) => {
@@ -85,6 +103,8 @@ export async function registerCollectionRoutes(
       id: number | string;
       name: string;
       description: string | null;
+      share_token: string;
+      is_public: boolean;
       created_at: Date;
       updated_at: Date;
       game_count: string;
@@ -93,6 +113,8 @@ export async function registerCollectionRoutes(
         c.id,
         c.name,
         c.description,
+        c.share_token,
+        c.is_public,
         c.created_at,
         c.updated_at,
         COUNT(cg.game_id)::text AS game_count
@@ -111,6 +133,8 @@ export async function registerCollectionRoutes(
         id: toId(row.id),
         name: row.name,
         description: row.description,
+        shareToken: row.share_token,
+        isPublic: row.is_public,
         gameCount: Number(row.game_count),
         createdAt: row.created_at.toISOString(),
         updatedAt: row.updated_at.toISOString(),
@@ -140,6 +164,7 @@ export async function registerCollectionRoutes(
 
       const hasName = Object.prototype.hasOwnProperty.call(parsed.data, "name");
       const hasDescription = Object.prototype.hasOwnProperty.call(parsed.data, "description");
+      const hasPublic = Object.prototype.hasOwnProperty.call(parsed.data, "isPublic");
       const nextDescription =
         parsed.data.description === undefined ? null : parsed.data.description;
 
@@ -147,6 +172,8 @@ export async function registerCollectionRoutes(
         id: number | string;
         name: string;
         description: string | null;
+        share_token: string;
+        is_public: boolean;
         created_at: Date;
         updated_at: Date;
       }>(
@@ -154,10 +181,20 @@ export async function registerCollectionRoutes(
          SET
            name = CASE WHEN $5::boolean THEN $3 ELSE name END,
            description = CASE WHEN $6::boolean THEN $4 ELSE description END,
+           is_public = CASE WHEN $8::boolean THEN $7 ELSE is_public END,
            updated_at = NOW()
          WHERE id = $1 AND user_id = $2
-         RETURNING id, name, description, created_at, updated_at`,
-        [collectionId, request.user!.id, parsed.data.name ?? null, nextDescription, hasName, hasDescription]
+         RETURNING id, name, description, share_token, is_public, created_at, updated_at`,
+        [
+          collectionId,
+          request.user!.id,
+          parsed.data.name ?? null,
+          nextDescription,
+          hasName,
+          hasDescription,
+          parsed.data.isPublic ?? false,
+          hasPublic,
+        ]
       );
 
       if (!result.rowCount) {
@@ -168,6 +205,8 @@ export async function registerCollectionRoutes(
         id: toId(row.id),
         name: row.name,
         description: row.description,
+        shareToken: row.share_token,
+        isPublic: row.is_public,
         createdAt: row.created_at.toISOString(),
         updatedAt: row.updated_at.toISOString(),
       };

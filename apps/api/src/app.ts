@@ -13,10 +13,12 @@ import {
   type AuthRateLimiter,
 } from "./infrastructure/auth_rate_limiter.js";
 import {
+  createAutoAnnotationQueue,
   createAnalysisQueue,
   createExportQueue,
   createGameAnalysisQueue,
   createImportQueue,
+  type AutoAnnotationQueue,
   type AnalysisQueue,
   type ExportQueue,
   type GameAnalysisQueue,
@@ -45,6 +47,8 @@ import { registerTagRoutes } from "./routes/tags.js";
 import { registerBackfillRoutes } from "./routes/backfill.js";
 import { registerOpsRoutes } from "./routes/ops.js";
 import { registerReportRoutes } from "./routes/reports.js";
+import { registerRepertoireRoutes } from "./routes/repertoires.js";
+import { registerPublicRoutes } from "./routes/public.js";
 import { createApiMetrics, registerApiMetrics } from "./observability/metrics.js";
 import { captureException } from "./observability/sentry.js";
 
@@ -55,6 +59,7 @@ export type BuildAppOptions = {
   analysisQueue?: AnalysisQueue;
   exportQueue?: ExportQueue;
   gameAnalysisQueue?: GameAnalysisQueue;
+  autoAnnotationQueue?: AutoAnnotationQueue;
   positionBackfillQueue?: PositionBackfillQueue;
   openingBackfillQueue?: OpeningBackfillQueue;
   objectStorage?: ObjectStorage;
@@ -170,6 +175,8 @@ export async function buildApp(
   const exportQueue = options.exportQueue ?? createExportQueue(config);
   const gameAnalysisQueue =
     options.gameAnalysisQueue ?? createGameAnalysisQueue(config);
+  const autoAnnotationQueue =
+    options.autoAnnotationQueue ?? createAutoAnnotationQueue(config);
   const positionBackfillQueue =
     options.positionBackfillQueue ?? createPositionBackfillQueue(config);
   const openingBackfillQueue =
@@ -184,6 +191,7 @@ export async function buildApp(
   const ownsAnalysisQueue = !options.analysisQueue;
   const ownsExportQueue = !options.exportQueue;
   const ownsGameAnalysisQueue = !options.gameAnalysisQueue;
+  const ownsAutoAnnotationQueue = !options.autoAnnotationQueue;
   const ownsPositionBackfillQueue = !options.positionBackfillQueue;
   const ownsOpeningBackfillQueue = !options.openingBackfillQueue;
   const ownsObjectStorage = !options.objectStorage;
@@ -310,14 +318,16 @@ export async function buildApp(
   await registerGameRoutes(app, pool);
   await registerFilterRoutes(app, pool);
   await registerImportRoutes(app, pool, config, importQueue, objectStorage);
-  await registerAnalysisRoutes(app, pool, analysisQueue, gameAnalysisQueue);
+  await registerAnalysisRoutes(app, pool, analysisQueue, gameAnalysisQueue, autoAnnotationQueue);
   await registerExportRoutes(app, pool, exportQueue, objectStorage);
   await registerSearchRoutes(app, pool);
   await registerOpeningRoutes(app, pool);
   await registerCollectionRoutes(app, pool);
   await registerTagRoutes(app, pool);
+  await registerRepertoireRoutes(app, pool);
   await registerBackfillRoutes(app, pool, positionBackfillQueue, openingBackfillQueue);
   await registerReportRoutes(app, pool);
+  await registerPublicRoutes(app, pool);
   await registerOpsRoutes(app, pool);
 
   app.setErrorHandler((error, request, reply) => {
@@ -354,6 +364,9 @@ export async function buildApp(
     }
     if (ownsGameAnalysisQueue) {
       await gameAnalysisQueue.close();
+    }
+    if (ownsAutoAnnotationQueue) {
+      await autoAnnotationQueue.close();
     }
     if (ownsPositionBackfillQueue) {
       await positionBackfillQueue.close();

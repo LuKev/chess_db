@@ -4,6 +4,7 @@ export const EXPORT_QUEUE_NAME = "exports";
 export const POSITION_BACKFILL_QUEUE_NAME = "position_backfill";
 export const OPENING_BACKFILL_QUEUE_NAME = "opening_aggregate_backfill";
 export const GAME_ANALYSIS_QUEUE_NAME = "game_analysis";
+export const AUTO_ANNOTATION_QUEUE_NAME = "auto_annotation";
 
 export type ImportJobPayload = {
   importJobId: number;
@@ -25,6 +26,11 @@ export type GameAnalysisJobPayload = {
   userId: number;
 };
 
+export type AutoAnnotationJobPayload = {
+  autoAnnotationJobId: number;
+  userId: number;
+};
+
 export type PositionBackfillPayload = {
   userId: number;
 };
@@ -43,6 +49,10 @@ export type OpeningBackfillQueue = {
 
 export type GameAnalysisQueue = {
   enqueueGameAnalysis(payload: GameAnalysisJobPayload): Promise<void>;
+};
+
+export type AutoAnnotationQueue = {
+  enqueueAutoAnnotation(payload: AutoAnnotationJobPayload): Promise<void>;
 };
 
 export function createBullmqConnection(redisUrl: string) {
