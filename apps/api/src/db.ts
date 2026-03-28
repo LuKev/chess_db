@@ -16,6 +16,7 @@ export async function resetDatabase(pool: Pool): Promise<void> {
       queue_dead_letters,
       password_reset_tokens,
       export_jobs,
+      user_index_status,
       opening_stats,
       game_positions,
       game_tags,

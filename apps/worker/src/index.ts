@@ -8,15 +8,20 @@ import {
   createBullmqConnection,
   EXPORT_QUEUE_NAME,
   type ExportJobPayload,
+  GAME_ANALYSIS_QUEUE_NAME,
+  type GameAnalysisJobPayload,
   IMPORT_QUEUE_NAME,
   type ImportJobPayload,
   OPENING_BACKFILL_QUEUE_NAME,
+  type OpeningBackfillQueue,
   type OpeningBackfillPayload,
   POSITION_BACKFILL_QUEUE_NAME,
+  type PositionBackfillQueue,
   type PositionBackfillPayload,
 } from "./infrastructure/queue.js";
 import { createObjectStorage } from "./infrastructure/storage.js";
 import { processAnalysisJob } from "./analysis/process_analysis_job.js";
+import { processGameAnalysisJob } from "./analysis/process_game_analysis_job.js";
 import { processExportJob } from "./exports/process_export_job.js";
 import { processImportJob } from "./imports/process_import_job.js";
 import { processOpeningBackfillJob } from "./backfill/process_opening_backfill_job.js";
@@ -76,12 +81,35 @@ const analysisQueueStats = new Queue(ANALYSIS_QUEUE_NAME, {
 const exportQueueStats = new Queue(EXPORT_QUEUE_NAME, {
   connection: bullmqConnection,
 });
+const gameAnalysisQueueStats = new Queue(GAME_ANALYSIS_QUEUE_NAME, {
+  connection: bullmqConnection,
+});
 const positionBackfillQueueStats = new Queue(POSITION_BACKFILL_QUEUE_NAME, {
   connection: bullmqConnection,
 });
 const openingBackfillQueueStats = new Queue(OPENING_BACKFILL_QUEUE_NAME, {
   connection: bullmqConnection,
 });
+
+const positionBackfillQueue: PositionBackfillQueue = {
+  async enqueuePositionBackfill(payload) {
+    await positionBackfillQueueStats.add("position-backfill", payload, {
+      jobId: `position-backfill-${payload.userId}`,
+      removeOnComplete: 50,
+      removeOnFail: 50,
+    });
+  },
+};
+
+const openingBackfillQueue: OpeningBackfillQueue = {
+  async enqueueOpeningBackfill(payload) {
+    await openingBackfillQueueStats.add("opening-backfill", payload, {
+      jobId: `opening-backfill-${payload.userId}`,
+      removeOnComplete: 50,
+      removeOnFail: 50,
+    });
+  },
+};
 
 console.log(
   `[worker] started (metrics: http://${config.metricsHost}:${config.metricsPort}/metrics)`
@@ -170,6 +198,7 @@ const importWorker = new Worker<ImportJobPayload>(
       await processImportJob({
         pool,
         storage,
+        positionBackfillQueue,
         importJobId: job.data.importJobId,
         userId: job.data.userId,
       });
@@ -218,6 +247,25 @@ const exportWorker = new Worker<ExportJobPayload>(
   }
 );
 
+const gameAnalysisWorker = new Worker<GameAnalysisJobPayload>(
+  GAME_ANALYSIS_QUEUE_NAME,
+  async (job) => {
+    await runInstrumentedJob(GAME_ANALYSIS_QUEUE_NAME, async () => {
+      await processGameAnalysisJob({
+        pool,
+        gameAnalysisJobId: job.data.gameAnalysisJobId,
+        userId: job.data.userId,
+        stockfishBinary: config.stockfishBinary,
+        cancelPollMs: config.analysisCancelPollMs,
+      });
+    });
+  },
+  {
+    connection: bullmqConnection,
+    concurrency: Math.max(1, Math.floor(config.workerConcurrency / 2)),
+  }
+);
+
 const positionBackfillWorker = new Worker<PositionBackfillPayload>(
   POSITION_BACKFILL_QUEUE_NAME,
   async (job) => {
@@ -225,6 +273,7 @@ const positionBackfillWorker = new Worker<PositionBackfillPayload>(
       await processPositionBackfillJob({
         pool,
         userId: job.data.userId,
+        openingBackfillQueue,
       });
     });
   },
@@ -292,6 +341,20 @@ exportWorker.on("failed", (job, error) => {
   });
 });
 
+gameAnalysisWorker.on("completed", (job) => {
+  console.log(`[worker] completed game analysis job ${job.id}`);
+});
+
+gameAnalysisWorker.on("failed", (job, error) => {
+  console.error(`[worker] failed game analysis job ${job?.id}: ${String(error)}`);
+  captureException(error);
+  void recordDeadLetter({
+    queueName: GAME_ANALYSIS_QUEUE_NAME,
+    job,
+    error,
+  });
+});
+
 positionBackfillWorker.on("completed", (job) => {
   console.log(`[worker] completed position backfill job ${job.id}`);
 });
@@ -333,6 +396,10 @@ async function refreshQueueDepthMetrics(): Promise<void> {
     (await exportQueueStats.getWaitingCount()) +
     (await exportQueueStats.getActiveCount()) +
     (await exportQueueStats.getDelayedCount());
+  const gameAnalysisDepth =
+    (await gameAnalysisQueueStats.getWaitingCount()) +
+    (await gameAnalysisQueueStats.getActiveCount()) +
+    (await gameAnalysisQueueStats.getDelayedCount());
   const positionBackfillDepth =
     (await positionBackfillQueueStats.getWaitingCount()) +
     (await positionBackfillQueueStats.getActiveCount()) +
@@ -345,6 +412,7 @@ async function refreshQueueDepthMetrics(): Promise<void> {
   updateQueueDepthMetric(metrics, IMPORT_QUEUE_NAME, importDepth);
   updateQueueDepthMetric(metrics, ANALYSIS_QUEUE_NAME, analysisDepth);
   updateQueueDepthMetric(metrics, EXPORT_QUEUE_NAME, exportDepth);
+  updateQueueDepthMetric(metrics, GAME_ANALYSIS_QUEUE_NAME, gameAnalysisDepth);
   updateQueueDepthMetric(metrics, POSITION_BACKFILL_QUEUE_NAME, positionBackfillDepth);
   updateQueueDepthMetric(metrics, OPENING_BACKFILL_QUEUE_NAME, openingBackfillDepth);
 }
@@ -380,12 +448,14 @@ async function shutdown(signal: string): Promise<void> {
   await importWorker.close();
   await analysisWorker.close();
   await exportWorker.close();
+  await gameAnalysisWorker.close();
   await positionBackfillWorker.close();
   await openingBackfillWorker.close();
 
   await importQueueStats.close();
   await analysisQueueStats.close();
   await exportQueueStats.close();
+  await gameAnalysisQueueStats.close();
   await positionBackfillQueueStats.close();
   await openingBackfillQueueStats.close();
 

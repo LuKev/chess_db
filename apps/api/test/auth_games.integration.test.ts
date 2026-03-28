@@ -8,6 +8,7 @@ import { createPool, resetDatabase } from "../src/db.js";
 import type {
   AnalysisQueue,
   ExportQueue,
+  GameAnalysisQueue,
   ImportQueue,
   OpeningBackfillQueue,
   PositionBackfillQueue,
@@ -52,6 +53,7 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
   const enqueuedJobs: Array<{ importJobId: number; userId: number }> = [];
   const enqueuedAnalysis: Array<{ analysisRequestId: number; userId: number }> = [];
   const enqueuedExports: Array<{ exportJobId: number; userId: number }> = [];
+  const enqueuedGameAnalysis: Array<{ gameAnalysisJobId: number; userId: number }> = [];
   const uploadedObjects: Array<{ key: string; contentType: string }> = [];
   const objectStore = new Map<string, string>();
 
@@ -71,6 +73,12 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     const noOpExportQueue: ExportQueue = {
       enqueueExport: async (payload) => {
         enqueuedExports.push(payload);
+      },
+      close: async () => {},
+    };
+    const noOpGameAnalysisQueue: GameAnalysisQueue = {
+      enqueueGameAnalysis: async (payload) => {
+        enqueuedGameAnalysis.push(payload);
       },
       close: async () => {},
     };
@@ -130,6 +138,7 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
       importQueue: noOpQueue,
       analysisQueue: noOpAnalysisQueue,
       exportQueue: noOpExportQueue,
+      gameAnalysisQueue: noOpGameAnalysisQueue,
       positionBackfillQueue: noOpPositionBackfillQueue,
       openingBackfillQueue: noOpOpeningBackfillQueue,
       objectStorage: noOpStorage,
@@ -142,6 +151,7 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     enqueuedJobs.length = 0;
     enqueuedAnalysis.length = 0;
     enqueuedExports.length = 0;
+    enqueuedGameAnalysis.length = 0;
     uploadedObjects.length = 0;
     objectStore.clear();
   });
@@ -1446,6 +1456,60 @@ function extractCookie(setCookieHeader: string | string[] | undefined): string {
     });
     expect(getLines.statusCode).toBe(200);
     expect(getLines.json().items).toHaveLength(1);
+
+    const queueGameAnalysis = await app.inject({
+      method: "POST",
+      url: `/api/games/${gameId}/analysis-jobs`,
+      headers: { cookie },
+      payload: {
+        depth: 12,
+        multipv: 2,
+        startPly: 0,
+        endPly: 4,
+      },
+    });
+    expect(queueGameAnalysis.statusCode).toBe(201);
+    expect(enqueuedGameAnalysis).toHaveLength(1);
+    const gameAnalysisJobId = queueGameAnalysis.json().id as number;
+
+    const listGameAnalysis = await app.inject({
+      method: "GET",
+      url: `/api/games/${gameId}/analysis-jobs`,
+      headers: { cookie },
+    });
+    expect(listGameAnalysis.statusCode).toBe(200);
+    expect(listGameAnalysis.json().items[0].id).toBe(gameAnalysisJobId);
+
+    const cancelGameAnalysis = await app.inject({
+      method: "POST",
+      url: `/api/games/${gameId}/analysis-jobs/${gameAnalysisJobId}/cancel`,
+      headers: { cookie },
+    });
+    expect(cancelGameAnalysis.statusCode).toBe(200);
+    expect(cancelGameAnalysis.json().status).toBe("cancelled");
+
+    const prepReport = await app.inject({
+      method: "POST",
+      url: "/api/reports/prep",
+      headers: { cookie },
+      payload: {
+        collectionId,
+      },
+    });
+    expect(prepReport.statusCode).toBe(200);
+    expect(prepReport.json().summary.totalGames).toBeGreaterThan(0);
+    expect(prepReport.json().modelGames[0].id).toBe(gameId);
+
+    const prepReportHtml = await app.inject({
+      method: "POST",
+      url: "/api/reports/prep/html",
+      headers: { cookie },
+      payload: {
+        collectionId,
+      },
+    });
+    expect(prepReportHtml.statusCode).toBe(200);
+    expect(prepReportHtml.body).toContain("Prep Report");
 
     const deleteLine = await app.inject({
       method: "DELETE",

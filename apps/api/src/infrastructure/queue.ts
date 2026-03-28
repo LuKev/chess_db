@@ -6,6 +6,7 @@ export const ANALYSIS_QUEUE_NAME = "analysis";
 export const EXPORT_QUEUE_NAME = "exports";
 export const POSITION_BACKFILL_QUEUE_NAME = "position_backfill";
 export const OPENING_BACKFILL_QUEUE_NAME = "opening_aggregate_backfill";
+export const GAME_ANALYSIS_QUEUE_NAME = "game_analysis";
 
 export type ImportJobPayload = {
   importJobId: number;
@@ -37,6 +38,16 @@ export type ExportQueue = {
   close(): Promise<void>;
 };
 
+export type GameAnalysisJobPayload = {
+  gameAnalysisJobId: number;
+  userId: number;
+};
+
+export type GameAnalysisQueue = {
+  enqueueGameAnalysis(payload: GameAnalysisJobPayload): Promise<void>;
+  close(): Promise<void>;
+};
+
 export type PositionBackfillPayload = {
   userId: number;
 };
@@ -60,6 +71,7 @@ const ANALYSIS_JOB_NAME = "analyze" as const;
 const EXPORT_JOB_NAME = "export" as const;
 const POSITION_BACKFILL_JOB_NAME = "position-backfill" as const;
 const OPENING_BACKFILL_JOB_NAME = "opening-backfill" as const;
+const GAME_ANALYSIS_JOB_NAME = "game-analysis" as const;
 
 function bullmqConnection(config: AppConfig) {
   // Avoid passing ioredis instances into BullMQ. In some deployment layouts (e.g. isolated installs),
@@ -128,6 +140,30 @@ export function createExportQueue(config: AppConfig): ExportQueue {
     async enqueueExport(payload: ExportJobPayload): Promise<void> {
       await queue.add(EXPORT_JOB_NAME, payload, {
         jobId: `export-${payload.exportJobId}`,
+        attempts: config.queueJobAttempts,
+        backoff: {
+          type: "exponential",
+          delay: config.queueJobBackoffMs,
+        },
+        removeOnComplete: 200,
+        removeOnFail: 200,
+      });
+    },
+    async close(): Promise<void> {
+      await queue.close();
+    },
+  };
+}
+
+export function createGameAnalysisQueue(config: AppConfig): GameAnalysisQueue {
+  const queue = new Queue<GameAnalysisJobPayload>(GAME_ANALYSIS_QUEUE_NAME, {
+    connection: bullmqConnection(config),
+  });
+
+  return {
+    async enqueueGameAnalysis(payload: GameAnalysisJobPayload): Promise<void> {
+      await queue.add(GAME_ANALYSIS_JOB_NAME, payload, {
+        jobId: `game-analysis-${payload.gameAnalysisJobId}`,
         attempts: config.queueJobAttempts,
         backoff: {
           type: "exponential",

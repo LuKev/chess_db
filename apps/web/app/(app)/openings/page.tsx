@@ -1,9 +1,13 @@
 "use client";
 
+import { Chess } from "chess.js";
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { FenPreviewBoard } from "../../../components/FenPreviewBoard";
+import { IndexStatusPanel } from "../../../components/IndexStatusPanel";
 import { fetchJson } from "../../../lib/api";
 import { useToasts } from "../../../components/ToastsProvider";
+import { useIndexStatusQuery } from "../../../features/indexing/useIndexStatusQuery";
 
 type OpeningTreeNode = {
   fenNorm: string;
@@ -30,6 +34,21 @@ type OpeningTreeResponse = {
   tree: OpeningTreeNode;
 };
 
+function sanForUci(fen: string, moveUci: string): string {
+  try {
+    const normalizedFen =
+      fen && fen !== "startpos" && fen.trim().split(/\s+/).length === 4 ? `${fen} 0 1` : fen;
+    const chess = new Chess(normalizedFen === "startpos" ? undefined : normalizedFen || undefined);
+    const from = moveUci.slice(0, 2);
+    const to = moveUci.slice(2, 4);
+    const promotion = moveUci.slice(4) || undefined;
+    const move = chess.move({ from, to, promotion });
+    return move?.san ?? moveUci;
+  } catch {
+    return moveUci;
+  }
+}
+
 export default function OpeningsPage() {
   const [fen, setFen] = useState("startpos");
   const [depth, setDepth] = useState(2);
@@ -38,6 +57,8 @@ export default function OpeningsPage() {
   const [status, setStatus] = useState("Load an opening tree from your database.");
   const [path, setPath] = useState<Array<{ fen: string; label: string }>>([]);
   const toasts = useToasts();
+  const indexStatus = useIndexStatusQuery();
+  const openingIndexReady = indexStatus.data?.opening.status === "indexed";
 
   const query = useMemo(() => {
     const params = new URLSearchParams();
@@ -47,6 +68,10 @@ export default function OpeningsPage() {
   }, [fen, depth]);
 
   async function loadOpeningTree(targetFen: string, label: string, nextPath?: Array<{ fen: string; label: string }>) {
+    if (!openingIndexReady) {
+      setStatus("Opening explorer is unavailable until the opening index finishes.");
+      return;
+    }
     setStatus("Loading opening tree...");
     const params = new URLSearchParams();
     params.set("fen", targetFen);
@@ -80,8 +105,9 @@ export default function OpeningsPage() {
     if (!nextFenNorm) {
       return;
     }
-    const nextPath = [...path, { fen: nextFenNorm, label: moveUci }];
-    await loadOpeningTree(nextFenNorm, moveUci, nextPath);
+    const moveLabel = activeFenNorm ? sanForUci(activeFenNorm, moveUci) : moveUci;
+    const nextPath = [...path, { fen: nextFenNorm, label: moveLabel }];
+    await loadOpeningTree(nextFenNorm, moveLabel, nextPath);
   }
 
   async function jumpTo(index: number): Promise<void> {
@@ -100,18 +126,21 @@ export default function OpeningsPage() {
           <h2>Opening Explorer</h2>
           <div className="button-row">
             <Link href="/games">Games</Link>
+            <Link href="/reports">Prep reports</Link>
             <Link href="/diagnostics">Diagnostics</Link>
           </div>
         </div>
         <p className="muted">Explore move popularity and results from your own game database.</p>
       </section>
 
+      <IndexStatusPanel compact />
+
       <section className="card">
         <h2>Load</h2>
         <div className="auth-grid">
           <label>
             FEN (or `startpos`)
-            <input value={fen} onChange={(event) => setFen(event.target.value)} />
+            <input value={fen} onChange={(event) => setFen(event.target.value)} disabled={!openingIndexReady} />
           </label>
           <label>
             Depth
@@ -123,15 +152,22 @@ export default function OpeningsPage() {
             </select>
           </label>
           <div className="button-row" style={{ alignSelf: "end" }}>
-            <button type="button" onClick={() => void loadRoot()}>
+            <button type="button" onClick={() => void loadRoot()} disabled={!openingIndexReady}>
               Load tree
             </button>
           </div>
         </div>
         <p className="muted">{status}</p>
+        {!openingIndexReady ? (
+          <p className="muted">Run or wait for opening indexing before exploring move trees.</p>
+        ) : null}
         <p className="muted" style={{ fontSize: 12 }}>
           Query: {query}
         </p>
+      </section>
+
+      <section className="card">
+        <FenPreviewBoard fen={activeFenNorm ?? fen} title="Current Position" />
       </section>
 
       <section className="card">
@@ -174,7 +210,10 @@ export default function OpeningsPage() {
               <tbody>
                 {tree.moves.map((move) => (
                   <tr key={move.moveUci}>
-                    <td>{move.moveUci}</td>
+                    <td>
+                      <strong>{activeFenNorm ? sanForUci(activeFenNorm, move.moveUci) : move.moveUci}</strong>
+                      <div className="muted muted-small">{move.moveUci}</div>
+                    </td>
                     <td>{move.games}</td>
                     <td>{move.popularityPct !== null ? `${Math.round(move.popularityPct)}%` : "-"}</td>
                     <td>{move.scorePct !== null ? `${Math.round(move.scorePct)}%` : "-"}</td>
@@ -183,9 +222,21 @@ export default function OpeningsPage() {
                     </td>
                     <td>{move.transpositions}</td>
                     <td>
-                      <button type="button" onClick={() => void diveMove(move.moveUci, move.nextFenNorm)} disabled={!move.nextFenNorm}>
-                        Dive
-                      </button>
+                      <div className="button-row">
+                        <button
+                          type="button"
+                          onClick={() => void diveMove(move.moveUci, move.nextFenNorm)}
+                          disabled={!move.nextFenNorm || !openingIndexReady}
+                        >
+                          Dive
+                        </button>
+                        {move.nextFenNorm ? (
+                          <>
+                            <Link href={`/search/position?fen=${encodeURIComponent(move.nextFenNorm)}`}>Search</Link>
+                            <Link href={`/games?positionFen=${encodeURIComponent(move.nextFenNorm)}`}>Games</Link>
+                          </>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

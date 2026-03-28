@@ -2,8 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { FenPreviewBoard } from "../../../../components/FenPreviewBoard";
+import { IndexStatusPanel } from "../../../../components/IndexStatusPanel";
 import { fetchJson } from "../../../../lib/api";
 import { useToasts } from "../../../../components/ToastsProvider";
+import { useIndexStatusQuery } from "../../../../features/indexing/useIndexStatusQuery";
 
 type PositionSearchRow = {
   gameId: number;
@@ -28,12 +31,24 @@ type PositionSearchResponse = {
   fenNorm: string;
 };
 
+type MaterialSearchResponse = {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: PositionSearchRow[];
+  materialKey: string;
+};
+
 export default function PositionSearchPage() {
+  const [mode, setMode] = useState<"exact" | "material">("exact");
   const [fen, setFen] = useState("startpos");
+  const [sideToMove, setSideToMove] = useState<"" | "w" | "b">("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Enter a FEN and search.");
-  const [results, setResults] = useState<PositionSearchResponse | null>(null);
+  const [results, setResults] = useState<Array<PositionSearchRow> | null>(null);
   const toasts = useToasts();
+  const indexStatus = useIndexStatusQuery();
+  const positionIndexReady = indexStatus.data?.position.status === "indexed";
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -47,12 +62,25 @@ export default function PositionSearchPage() {
   }, []);
 
   async function searchExact(): Promise<void> {
+    if (!positionIndexReady) {
+      setStatus("Position search is unavailable until the position index finishes.");
+      return;
+    }
     setBusy(true);
-    setStatus("Searching...");
-    const response = await fetchJson<PositionSearchResponse>("/api/search/position", {
-      method: "POST",
-      body: JSON.stringify({ fen }),
-    });
+    setStatus(mode === "exact" ? "Searching exact positions..." : "Searching by material...");
+    const response =
+      mode === "exact"
+        ? await fetchJson<PositionSearchResponse>("/api/search/position", {
+            method: "POST",
+            body: JSON.stringify({ fen }),
+          })
+        : await fetchJson<MaterialSearchResponse>("/api/search/position/material", {
+            method: "POST",
+            body: JSON.stringify({
+              fen,
+              sideToMove: sideToMove || undefined,
+            }),
+          });
     setBusy(false);
 
     if (response.status !== 200 || !("items" in response.data)) {
@@ -66,8 +94,12 @@ export default function PositionSearchPage() {
       return;
     }
 
-    setResults(response.data);
-    setStatus(`${response.data.total} hit(s) for normalized FEN: ${response.data.fenNorm}`);
+    setResults(response.data.items);
+    if ("fenNorm" in response.data) {
+      setStatus(`${response.data.total} hit(s) for normalized FEN: ${response.data.fenNorm}`);
+    } else {
+      setStatus(`${response.data.total} hit(s) for material key: ${response.data.materialKey}`);
+    }
   }
 
   return (
@@ -77,26 +109,53 @@ export default function PositionSearchPage() {
           <h2>Position Search</h2>
           <div className="button-row">
             <Link href="/games">Games</Link>
+            <Link href="/reports">Prep reports</Link>
             <Link href="/diagnostics">Diagnostics</Link>
           </div>
         </div>
-        <p className="muted">Find games and plies matching a position (exact FEN match).</p>
+        <p className="muted">Find games and plies by exact position or by material shape.</p>
       </section>
+
+      <IndexStatusPanel compact />
 
       <section className="card">
         <h2>Search</h2>
         <div className="auth-grid">
           <label>
-            FEN (or `startpos`)
-            <input value={fen} onChange={(event) => setFen(event.target.value)} />
+            Mode
+            <select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}>
+              <option value="exact">Exact FEN</option>
+              <option value="material">Material match</option>
+            </select>
           </label>
+          <label>
+            FEN (or `startpos`)
+            <input value={fen} onChange={(event) => setFen(event.target.value)} disabled={!positionIndexReady} />
+          </label>
+          {mode === "material" ? (
+            <label>
+              Side to move
+              <select value={sideToMove} onChange={(event) => setSideToMove(event.target.value as typeof sideToMove)}>
+                <option value="">Either</option>
+                <option value="w">White</option>
+                <option value="b">Black</option>
+              </select>
+            </label>
+          ) : null}
           <div className="button-row" style={{ alignSelf: "end" }}>
-            <button type="button" onClick={() => void searchExact()} disabled={busy}>
+            <button type="button" onClick={() => void searchExact()} disabled={busy || !positionIndexReady}>
               Search
             </button>
           </div>
         </div>
         <p className="muted">{status}</p>
+        {!positionIndexReady ? (
+          <p className="muted">Run or wait for position indexing before searching by FEN.</p>
+        ) : null}
+      </section>
+
+      <section className="card">
+        <FenPreviewBoard fen={fen} title="Preview" />
       </section>
 
       <section className="card">
@@ -116,7 +175,7 @@ export default function PositionSearchPage() {
                 </tr>
               </thead>
               <tbody>
-                {results.items.map((row) => (
+                {results.map((row) => (
                   <tr key={`${row.gameId}-${row.ply}`}>
                     <td>{row.gameId}</td>
                     <td>{row.ply}</td>
@@ -135,7 +194,7 @@ export default function PositionSearchPage() {
                     </td>
                   </tr>
                 ))}
-                {results.items.length === 0 ? (
+                {results.length === 0 ? (
                   <tr>
                     <td colSpan={7}>No matches.</td>
                   </tr>

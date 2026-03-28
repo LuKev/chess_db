@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../../../lib/api";
+import { IndexStatusPanel } from "../../../components/IndexStatusPanel";
 import { useToasts } from "../../../components/ToastsProvider";
+
+type ImportIndexState = {
+  rawStatus: string;
+  status: string;
+  requestedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+};
 
 type ImportJob = {
   id: number;
@@ -20,6 +29,10 @@ type ImportJob = {
     };
   };
   strictDuplicateMode?: boolean;
+  indexing?: {
+    position: ImportIndexState;
+    opening: ImportIndexState;
+  };
   throughputGamesPerMinute?: number | null;
   createdAt: string;
   updatedAt: string;
@@ -207,6 +220,8 @@ export default function ImportPage() {
         </div>
       </section>
 
+      <IndexStatusPanel />
+
       <section className="card">
         <div className="section-head">
           <h2>Recent Imports</h2>
@@ -229,6 +244,8 @@ export default function ImportPage() {
                   <th>Inserted</th>
                   <th>Duplicates</th>
                   <th>Errors</th>
+                  <th>Position index</th>
+                  <th>Opening index</th>
                   <th>Strict</th>
                   <th>Updated</th>
                   <th>Action</th>
@@ -243,6 +260,8 @@ export default function ImportPage() {
                     <td>{job.totals.inserted}</td>
                     <td>{job.totals.duplicates}</td>
                     <td>{job.totals.parseErrors}</td>
+                    <td>{job.indexing?.position.status ?? "-"}</td>
+                    <td>{job.indexing?.opening.status ?? "-"}</td>
                     <td>{job.strictDuplicateMode ? "yes" : "no"}</td>
                     <td>{new Date(job.updatedAt).toLocaleString()}</td>
                     <td>
@@ -258,7 +277,7 @@ export default function ImportPage() {
                 ))}
                 {imports.data.items.length === 0 ? (
                   <tr>
-                    <td colSpan={9}>No imports yet.</td>
+                    <td colSpan={11}>No imports yet.</td>
                   </tr>
                 ) : null}
               </tbody>

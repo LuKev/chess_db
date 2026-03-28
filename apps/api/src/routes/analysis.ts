@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { requireUser } from "../auth.js";
-import type { AnalysisQueue } from "../infrastructure/queue.js";
+import type { AnalysisQueue, GameAnalysisQueue } from "../infrastructure/queue.js";
 import { normalizeFen } from "../chess/fen.js";
 import { parseIdempotencyKey } from "../http/idempotency.js";
 
@@ -12,6 +12,11 @@ const CreateAnalysisSchema = z.object({
   nodes: z.number().int().positive().max(50_000_000).optional(),
   timeMs: z.number().int().positive().max(120_000).optional(),
   engine: z.string().trim().min(1).max(64).default("stockfish"),
+  multipv: z.number().int().min(1).max(20).default(1),
+  gameId: z.number().int().positive().optional(),
+  ply: z.number().int().min(0).optional(),
+  autoStore: z.boolean().default(false),
+  source: z.string().trim().min(1).max(64).default("manual"),
 });
 
 const StoreAnalysisSchema = z.object({
@@ -30,6 +35,16 @@ const StoreAnalysisSchema = z.object({
   source: z.string().trim().min(1).max(64).default("manual"),
 });
 
+const CreateGameAnalysisSchema = z.object({
+  depth: z.number().int().min(1).max(40).default(18),
+  nodes: z.number().int().positive().max(50_000_000).optional(),
+  timeMs: z.number().int().positive().max(120_000).optional(),
+  engine: z.string().trim().min(1).max(64).default("stockfish"),
+  multipv: z.number().int().min(1).max(20).default(1),
+  startPly: z.number().int().min(0).default(0),
+  endPly: z.number().int().min(0).optional(),
+});
+
 function toId(value: number | string): number {
   if (typeof value === "number") {
     return value;
@@ -40,8 +55,75 @@ function toId(value: number | string): number {
 export async function registerAnalysisRoutes(
   app: FastifyInstance,
   pool: Pool,
-  queue: AnalysisQueue
+  queue: AnalysisQueue,
+  gameAnalysisQueue: GameAnalysisQueue
 ): Promise<void> {
+  const parseResultLines = (
+    raw: unknown,
+    fallback: {
+      bestMove: string | null;
+      pv: string | null;
+      evalCp: number | null;
+      evalMate: number | null;
+      multipv?: number | null;
+    }
+  ): Array<{
+    multipv: number;
+    bestMove: string | null;
+    pv: string | null;
+    evalCp: number | null;
+    evalMate: number | null;
+  }> => {
+    const parsed = Array.isArray(raw)
+      ? raw
+          .map((entry) => {
+            if (!entry || typeof entry !== "object") {
+              return null;
+            }
+            const value = entry as Record<string, unknown>;
+            return {
+              multipv:
+                typeof value.multipv === "number" && Number.isInteger(value.multipv) && value.multipv > 0
+                  ? value.multipv
+                  : 1,
+              bestMove: typeof value.bestMove === "string" ? value.bestMove : null,
+              pv: typeof value.pv === "string" ? value.pv : null,
+              evalCp: typeof value.evalCp === "number" ? value.evalCp : null,
+              evalMate: typeof value.evalMate === "number" ? value.evalMate : null,
+            };
+          })
+          .filter(
+            (
+              value
+            ): value is {
+              multipv: number;
+              bestMove: string | null;
+              pv: string | null;
+              evalCp: number | null;
+              evalMate: number | null;
+            } => value !== null
+          )
+      : [];
+
+    if (parsed.length > 0) {
+      return parsed.sort((a, b) => a.multipv - b.multipv);
+    }
+
+    if (!fallback.bestMove && !fallback.pv && fallback.evalCp === null && fallback.evalMate === null) {
+      return [];
+    }
+
+    return [
+      {
+        multipv: fallback.multipv ?? 1,
+        bestMove: fallback.bestMove,
+        pv: fallback.pv,
+        evalCp: fallback.evalCp,
+        evalMate: fallback.evalMate,
+      },
+    ];
+  };
+
   app.post("/api/analysis", { preHandler: requireUser }, async (request, reply) => {
     const parsed = CreateAnalysisSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -52,6 +134,9 @@ export async function registerAnalysisRoutes(
     }
 
     const payload = parsed.data;
+    if (payload.autoStore && (payload.gameId === undefined || payload.ply === undefined)) {
+      return reply.status(400).send({ error: "autoStore requires gameId and ply" });
+    }
     const parsedIdempotency = parseIdempotencyKey(request.headers["idempotency-key"]);
     if (parsedIdempotency.error) {
       return reply.status(400).send({ error: parsedIdempotency.error });
@@ -83,6 +168,17 @@ export async function registerAnalysisRoutes(
     } catch (error) {
       return reply.status(400).send({ error: String(error) });
     }
+
+    if (payload.gameId !== undefined) {
+      const gameOwnership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [payload.gameId, request.user!.id]
+      );
+      if (!gameOwnership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+    }
+
     const inFlightCount = await pool.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total
        FROM engine_requests
@@ -98,17 +194,19 @@ export async function registerAnalysisRoutes(
     }
 
     const cachedLine = await pool.query<{
-      best_move: string | null;
+      multipv_rank: number;
       pv_uci: string[] | null;
       eval_cp: number | null;
       eval_mate: number | null;
       depth: number | null;
       nodes: number | null;
       time_ms: number | null;
+      pv_san: string[] | null;
     }>(
-      `SELECT
-        CASE WHEN array_length(pv_uci, 1) > 0 THEN pv_uci[1] ELSE NULL END AS best_move,
+      `SELECT DISTINCT ON (COALESCE(multipv, 1))
+        COALESCE(multipv, 1) AS multipv_rank,
         pv_uci,
+        pv_san,
         eval_cp,
         eval_mate,
         depth,
@@ -119,13 +217,26 @@ export async function registerAnalysisRoutes(
         AND fen_norm = $2
         AND engine = $3
         AND ($4::int IS NULL OR depth >= $4::int)
-      ORDER BY depth DESC NULLS LAST, created_at DESC
-      LIMIT 1`,
-      [request.user!.id, fenNorm, payload.engine, payload.depth ?? null]
+        AND COALESCE(multipv, 1) <= $5::int
+      ORDER BY COALESCE(multipv, 1), depth DESC NULLS LAST, created_at DESC`,
+      [request.user!.id, fenNorm, payload.engine, payload.depth ?? null, payload.multipv]
     );
 
-    if (cachedLine.rowCount) {
-      const cached = cachedLine.rows[0];
+    if ((cachedLine.rowCount ?? 0) >= payload.multipv) {
+      const cachedLines = cachedLine.rows
+        .map((row) => ({
+          multipv: row.multipv_rank,
+          bestMove: row.pv_uci?.[0] ?? null,
+          pv: (row.pv_uci ?? []).join(" "),
+          evalCp: row.eval_cp,
+          evalMate: row.eval_mate,
+          depth: row.depth,
+          nodes: row.nodes,
+          timeMs: row.time_ms,
+        }))
+        .sort((a, b) => a.multipv - b.multipv)
+        .slice(0, payload.multipv);
+      const primary = cachedLines[0];
       let analysisRequestId: number;
       try {
         const createResult = await pool.query<{ id: number | string }>(
@@ -133,28 +244,50 @@ export async function registerAnalysisRoutes(
             user_id,
             status,
             fen,
+            engine,
+            multipv,
             depth,
             nodes,
             time_ms,
+            game_id,
+            ply,
+            auto_store,
+            source,
             best_move,
             principal_variation,
             eval_cp,
             eval_mate,
+            result_lines,
             idempotency_key
           ) VALUES (
-            $1, 'completed', $2, $3, $4, $5, $6, $7, $8, $9, $10
+            $1, 'completed', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16
           )
           RETURNING id`,
           [
             request.user!.id,
             payload.fen,
-            cached.depth ?? payload.depth,
-            cached.nodes ?? payload.nodes ?? null,
-            cached.time_ms ?? payload.timeMs ?? null,
-            cached.best_move,
-            (cached.pv_uci ?? []).join(" "),
-            cached.eval_cp,
-            cached.eval_mate,
+            payload.engine,
+            payload.multipv,
+            primary?.depth ?? payload.depth,
+            primary?.nodes ?? payload.nodes ?? null,
+            primary?.timeMs ?? payload.timeMs ?? null,
+            payload.gameId ?? null,
+            payload.ply ?? null,
+            payload.autoStore,
+            payload.source,
+            primary?.bestMove ?? null,
+            primary?.pv ?? null,
+            primary?.evalCp ?? null,
+            primary?.evalMate ?? null,
+            JSON.stringify(
+              cachedLines.map((line) => ({
+                multipv: line.multipv,
+                bestMove: line.bestMove,
+                pv: line.pv,
+                evalCp: line.evalCp,
+                evalMate: line.evalMate,
+              }))
+            ),
             idempotencyKey,
           ]
         );
@@ -195,19 +328,31 @@ export async function registerAnalysisRoutes(
           user_id,
           status,
           fen,
+          engine,
+          multipv,
           depth,
           nodes,
           time_ms,
+          game_id,
+          ply,
+          auto_store,
+          source,
           idempotency_key
         )
-         VALUES ($1, 'queued', $2, $3, $4, $5, $6)
+         VALUES ($1, 'queued', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id`,
         [
           request.user!.id,
           payload.fen,
+          payload.engine,
+          payload.multipv,
           payload.depth,
           payload.nodes ?? null,
           payload.timeMs ?? null,
+          payload.gameId ?? null,
+          payload.ply ?? null,
+          payload.autoStore,
+          payload.source,
           idempotencyKey,
         ]
       );
@@ -345,13 +490,20 @@ export async function registerAnalysisRoutes(
         id: number | string;
         status: string;
         fen: string;
+        engine: string;
+        multipv: number;
         depth: number | null;
         nodes: number | null;
         time_ms: number | null;
+        game_id: number | string | null;
+        ply: number | null;
+        auto_store: boolean;
+        source: string;
         best_move: string | null;
         principal_variation: string | null;
         eval_cp: number | null;
         eval_mate: number | null;
+        result_lines: unknown;
         error_message: string | null;
         created_at: Date;
         updated_at: Date;
@@ -360,13 +512,20 @@ export async function registerAnalysisRoutes(
           id,
           status,
           fen,
+          engine,
+          multipv,
           depth,
           nodes,
           time_ms,
+          game_id,
+          ply,
+          auto_store,
+          source,
           best_move,
           principal_variation,
           eval_cp,
           eval_mate,
+          result_lines,
           error_message,
           created_at,
           updated_at
@@ -380,10 +539,25 @@ export async function registerAnalysisRoutes(
       }
 
       const row = result.rows[0];
+      const resultLines = parseResultLines(row.result_lines, {
+        bestMove: row.best_move,
+        pv: row.principal_variation,
+        evalCp: row.eval_cp,
+        evalMate: row.eval_mate,
+        multipv: row.multipv,
+      });
       return {
         id: toId(row.id),
         status: row.status,
         fen: row.fen,
+        engine: row.engine,
+        multipv: row.multipv,
+        context: {
+          gameId: row.game_id === null ? null : toId(row.game_id),
+          ply: row.ply,
+          autoStore: row.auto_store,
+          source: row.source,
+        },
         limits: {
           depth: row.depth,
           nodes: row.nodes,
@@ -394,6 +568,7 @@ export async function registerAnalysisRoutes(
           pv: row.principal_variation,
           evalCp: row.eval_cp,
           evalMate: row.eval_mate,
+          lines: resultLines,
         },
         error: row.error_message,
         createdAt: row.created_at.toISOString(),
@@ -423,20 +598,24 @@ export async function registerAnalysisRoutes(
         const result = await pool.query<{
           id: number | string;
           status: string;
+          multipv: number;
           best_move: string | null;
           principal_variation: string | null;
           eval_cp: number | null;
           eval_mate: number | null;
+          result_lines: unknown;
           error_message: string | null;
           updated_at: Date;
         }>(
           `SELECT
             id,
             status,
+            multipv,
             best_move,
             principal_variation,
             eval_cp,
             eval_mate,
+            result_lines,
             error_message,
             updated_at
           FROM engine_requests
@@ -453,6 +632,13 @@ export async function registerAnalysisRoutes(
         }
 
         const row = result.rows[0];
+        const resultLines = parseResultLines(row.result_lines, {
+          bestMove: row.best_move,
+          pv: row.principal_variation,
+          evalCp: row.eval_cp,
+          evalMate: row.eval_mate,
+          multipv: row.multipv,
+        });
         reply.raw.write(
           `data: ${JSON.stringify({
             id: toId(row.id),
@@ -462,6 +648,7 @@ export async function registerAnalysisRoutes(
               pv: row.principal_variation,
               evalCp: row.eval_cp,
               evalMate: row.eval_mate,
+              lines: resultLines,
             },
             error: row.error_message,
             updatedAt: row.updated_at.toISOString(),
@@ -523,6 +710,205 @@ export async function registerAnalysisRoutes(
 
       return {
         id: analysisRequestId,
+        status: result.rows[0].status,
+      };
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/games/:id/analysis-jobs",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      if (!Number.isInteger(gameId) || gameId <= 0) {
+        return reply.status(400).send({ error: "Invalid game id" });
+      }
+
+      const parsed = CreateGameAnalysisSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten(),
+        });
+      }
+
+      if (parsed.data.endPly !== undefined && parsed.data.endPly < parsed.data.startPly) {
+        return reply.status(400).send({ error: "endPly must be greater than or equal to startPly" });
+      }
+
+      const gameOwnership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [gameId, request.user!.id]
+      );
+      if (!gameOwnership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+
+      const createResult = await pool.query<{ id: number | string }>(
+        `INSERT INTO game_analysis_jobs (
+          user_id,
+          game_id,
+          status,
+          engine,
+          depth,
+          nodes,
+          time_ms,
+          multipv,
+          start_ply,
+          end_ply
+        ) VALUES (
+          $1, $2, 'queued', $3, $4, $5, $6, $7, $8, $9
+        )
+        RETURNING id`,
+        [
+          request.user!.id,
+          gameId,
+          parsed.data.engine,
+          parsed.data.depth,
+          parsed.data.nodes ?? null,
+          parsed.data.timeMs ?? null,
+          parsed.data.multipv,
+          parsed.data.startPly,
+          parsed.data.endPly ?? null,
+        ]
+      );
+
+      const gameAnalysisJobId = toId(createResult.rows[0].id);
+
+      try {
+        await gameAnalysisQueue.enqueueGameAnalysis({
+          gameAnalysisJobId,
+          userId: request.user!.id,
+        });
+      } catch (error) {
+        request.log.error(error);
+        await pool.query(
+          `UPDATE game_analysis_jobs
+           SET status = 'failed',
+               error_message = 'Failed to enqueue game analysis job',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [gameAnalysisJobId]
+        );
+        return reply.status(500).send({ error: "Failed to enqueue game analysis job" });
+      }
+
+      return reply.status(201).send({
+        id: gameAnalysisJobId,
+        status: "queued",
+      });
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/games/:id/analysis-jobs",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      if (!Number.isInteger(gameId) || gameId <= 0) {
+        return reply.status(400).send({ error: "Invalid game id" });
+      }
+
+      const gameOwnership = await pool.query<{ id: number | string }>(
+        "SELECT id FROM games WHERE id = $1 AND user_id = $2",
+        [gameId, request.user!.id]
+      );
+      if (!gameOwnership.rowCount) {
+        return reply.status(404).send({ error: "Game not found" });
+      }
+
+      const result = await pool.query<{
+        id: number | string;
+        status: string;
+        engine: string;
+        depth: number | null;
+        nodes: number | null;
+        time_ms: number | null;
+        multipv: number;
+        start_ply: number;
+        end_ply: number | null;
+        processed_positions: number;
+        stored_lines: number;
+        error_message: string | null;
+        cancel_requested: boolean;
+        created_at: Date;
+        updated_at: Date;
+      }>(
+        `SELECT
+          id,
+          status,
+          engine,
+          depth,
+          nodes,
+          time_ms,
+          multipv,
+          start_ply,
+          end_ply,
+          processed_positions,
+          stored_lines,
+          error_message,
+          cancel_requested,
+          created_at,
+          updated_at
+        FROM game_analysis_jobs
+        WHERE game_id = $1
+          AND user_id = $2
+        ORDER BY id DESC
+        LIMIT 20`,
+        [gameId, request.user!.id]
+      );
+
+      return {
+        gameId,
+        items: result.rows.map((row) => ({
+          id: toId(row.id),
+          status: row.status,
+          engine: row.engine,
+          depth: row.depth,
+          nodes: row.nodes,
+          timeMs: row.time_ms,
+          multipv: row.multipv,
+          startPly: row.start_ply,
+          endPly: row.end_ply,
+          processedPositions: row.processed_positions,
+          storedLines: row.stored_lines,
+          cancelRequested: row.cancel_requested,
+          error: row.error_message,
+          createdAt: row.created_at.toISOString(),
+          updatedAt: row.updated_at.toISOString(),
+        })),
+      };
+    }
+  );
+
+  app.post<{ Params: { id: string; jobId: string } }>(
+    "/api/games/:id/analysis-jobs/:jobId/cancel",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const gameId = Number(request.params.id);
+      const gameAnalysisJobId = Number(request.params.jobId);
+      if (!Number.isInteger(gameId) || gameId <= 0 || !Number.isInteger(gameAnalysisJobId) || gameAnalysisJobId <= 0) {
+        return reply.status(400).send({ error: "Invalid analysis job id" });
+      }
+
+      const result = await pool.query<{ status: string }>(
+        `UPDATE game_analysis_jobs
+         SET cancel_requested = TRUE,
+             status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
+             updated_at = NOW()
+         WHERE id = $1
+           AND game_id = $2
+           AND user_id = $3
+         RETURNING status`,
+        [gameAnalysisJobId, gameId, request.user!.id]
+      );
+
+      if (!result.rowCount) {
+        return reply.status(404).send({ error: "Game analysis job not found" });
+      }
+
+      return {
+        id: gameAnalysisJobId,
         status: result.rows[0].status,
       };
     }

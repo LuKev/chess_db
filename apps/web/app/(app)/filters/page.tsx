@@ -25,6 +25,18 @@ type FilterPreset = {
 type PresetResponse = { items: FilterPreset[] };
 type FiltersResponse = { items: SavedFilter[] };
 
+function filterQueryHref(query: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === null || value === undefined || typeof value === "object") {
+      continue;
+    }
+    params.set(key, String(value));
+  }
+  const search = params.toString();
+  return search.length > 0 ? `/games?${search}` : "/games";
+}
+
 export default function FiltersPage() {
   const [name, setName] = useState("");
   const [queryJson, setQueryJson] = useState('{\n  "sort": "date_desc"\n}');
@@ -139,6 +151,7 @@ export default function FiltersPage() {
           <h2>Saved Filters</h2>
           <div className="button-row">
             <Link href="/games">Games</Link>
+            <Link href="/reports">Prep reports</Link>
             <Link href="/diagnostics">Diagnostics</Link>
           </div>
         </div>
@@ -223,7 +236,7 @@ export default function FiltersPage() {
                   <th>Share Token</th>
                   <th>Updated</th>
                   <th>Query</th>
-                  <th>Action</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -237,9 +250,17 @@ export default function FiltersPage() {
                       <pre className="pgn-pre">{JSON.stringify(filter.query, null, 2)}</pre>
                     </td>
                     <td>
-                      <button type="button" onClick={() => void deleteFilter(filter.id)}>
-                        Delete
-                      </button>
+                      <div className="button-row">
+                        <Link href={filterQueryHref(filter.query)}>
+                          Open
+                        </Link>
+                        <Link href={`/reports?savedFilterId=${filter.id}&title=${encodeURIComponent(filter.name)}`}>
+                          Report
+                        </Link>
+                        <button type="button" onClick={() => void deleteFilter(filter.id)}>
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -276,4 +297,3 @@ export default function FiltersPage() {
     </main>
   );
 }
-
