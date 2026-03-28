@@ -4,8 +4,10 @@ import Link from "next/link";
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchJson } from "../../../lib/api";
+import { IndexStatusPanel } from "../../../components/IndexStatusPanel";
 import { useToasts } from "../../../components/ToastsProvider";
 import { GameViewerPanel } from "../../../components/GameViewerPanel";
+import { useIndexStatusQuery } from "../../../features/indexing/useIndexStatusQuery";
 
 type TagItem = {
   id: number;
@@ -40,6 +42,19 @@ type CollectionItem = {
   name: string;
   description: string | null;
   gameCount: number;
+};
+
+type SavedFilter = {
+  id: number;
+  name: string;
+  query: Record<string, unknown>;
+};
+
+type FilterPreset = {
+  id: string;
+  name: string;
+  description: string;
+  query: Record<string, unknown>;
 };
 
 type GameColumnId =
@@ -145,13 +160,18 @@ export default function GamesPage() {
   const [eco, setEco] = useState("");
   const [openingPrefix, setOpeningPrefix] = useState("");
   const [eventFilter, setEventFilter] = useState("");
+  const [siteFilter, setSiteFilter] = useState("");
   const [result, setResult] = useState("");
+  const [timeControl, setTimeControl] = useState("");
+  const [rated, setRated] = useState<"" | "true" | "false">("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [whiteEloMin, setWhiteEloMin] = useState("");
   const [whiteEloMax, setWhiteEloMax] = useState("");
   const [blackEloMin, setBlackEloMin] = useState("");
   const [blackEloMax, setBlackEloMax] = useState("");
+  const [avgEloMin, setAvgEloMin] = useState("");
+  const [avgEloMax, setAvgEloMax] = useState("");
   const [collectionId, setCollectionId] = useState<number | "">("");
   const [tagId, setTagId] = useState<number | "">("");
   const [positionFen, setPositionFen] = useState("");
@@ -162,9 +182,14 @@ export default function GamesPage() {
   const [columnWidth, setColumnWidth] = useState(DEFAULT_COLUMN_WIDTH);
   const [visibleColumns, setVisibleColumns] = useState<GameColumnId[]>(DEFAULT_VISIBLE_COLUMNS);
   const [displayControlsOpen, setDisplayControlsOpen] = useState(false);
+  const [activeSavedFilterId, setActiveSavedFilterId] = useState<number | null>(null);
 
   const queryClient = useQueryClient();
   const toasts = useToasts();
+  const indexStatus = useIndexStatusQuery();
+  const positionIndexReady = indexStatus.data?.position.status === "indexed";
+  const disablePositionFilter =
+    (indexStatus.data?.totalGames ?? 0) > 0 && !positionIndexReady;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -225,16 +250,21 @@ export default function GamesPage() {
     if (eco.trim()) params.set("eco", eco.trim());
     if (openingPrefix.trim()) params.set("openingPrefix", openingPrefix.trim());
     if (eventFilter.trim()) params.set("event", eventFilter.trim());
+    if (siteFilter.trim()) params.set("site", siteFilter.trim());
     if (result.trim()) params.set("result", result.trim());
+    if (timeControl.trim()) params.set("timeControl", timeControl.trim());
+    if (rated) params.set("rated", rated);
     if (fromDate.trim()) params.set("fromDate", fromDate.trim());
     if (toDate.trim()) params.set("toDate", toDate.trim());
     if (whiteEloMin.trim()) params.set("whiteEloMin", whiteEloMin.trim());
     if (whiteEloMax.trim()) params.set("whiteEloMax", whiteEloMax.trim());
     if (blackEloMin.trim()) params.set("blackEloMin", blackEloMin.trim());
     if (blackEloMax.trim()) params.set("blackEloMax", blackEloMax.trim());
+    if (avgEloMin.trim()) params.set("avgEloMin", avgEloMin.trim());
+    if (avgEloMax.trim()) params.set("avgEloMax", avgEloMax.trim());
     if (collectionId !== "") params.set("collectionId", String(collectionId));
     if (tagId !== "") params.set("tagId", String(tagId));
-    if (positionFen.trim()) params.set("positionFen", positionFen.trim());
+    if (positionIndexReady && positionFen.trim()) params.set("positionFen", positionFen.trim());
     return params.toString();
   }, [
     pageSize,
@@ -243,16 +273,22 @@ export default function GamesPage() {
     eco,
     openingPrefix,
     eventFilter,
+    siteFilter,
     result,
+    timeControl,
+    rated,
     fromDate,
     toDate,
     whiteEloMin,
     whiteEloMax,
     blackEloMin,
     blackEloMax,
+    avgEloMin,
+    avgEloMax,
     collectionId,
     tagId,
     positionFen,
+    positionIndexReady,
   ]);
 
   useEffect(() => {
@@ -277,13 +313,18 @@ export default function GamesPage() {
         eco,
         openingPrefix,
         eventFilter,
+        siteFilter,
         result,
+        timeControl,
+        rated,
         fromDate,
         toDate,
         whiteEloMin,
         whiteEloMax,
         blackEloMin,
         blackEloMax,
+        avgEloMin,
+        avgEloMax,
         collectionId,
         tagId,
         positionFen,
@@ -328,6 +369,36 @@ export default function GamesPage() {
         "error" in response.data && response.data.error
           ? response.data.error
           : `Failed to load collections (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
+  const filterPresets = useQuery({
+    queryKey: ["filter-presets"],
+    queryFn: async (): Promise<FilterPreset[]> => {
+      const response = await fetchJson<{ items: FilterPreset[] }>("/api/filters/presets", { method: "GET" });
+      if (response.status === 200 && "items" in response.data) {
+        return response.data.items;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load filter presets (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
+  const savedFilters = useQuery({
+    queryKey: ["saved-filters"],
+    queryFn: async (): Promise<SavedFilter[]> => {
+      const response = await fetchJson<{ items: SavedFilter[] }>("/api/filters", { method: "GET" });
+      if (response.status === 200 && "items" in response.data) {
+        return response.data.items;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load saved filters (status ${response.status})`;
       throw new Error(msg);
     },
   });
@@ -631,22 +702,85 @@ export default function GamesPage() {
     clearSelection();
   }
 
+  function asString(value: unknown): string {
+    return typeof value === "string" ? value : "";
+  }
+
+  function asNumberString(value: unknown): string {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    return "";
+  }
+
+  function asId(value: unknown): number | "" {
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      return Number.isInteger(parsed) && parsed > 0 ? parsed : "";
+    }
+    return "";
+  }
+
+  function applyFilterQuery(query: Record<string, unknown>, label: string, source?: { savedFilterId?: number | null }): void {
+    const nextSort = query.sort;
+    setSort(
+      nextSort === "date_desc" || nextSort === "date_asc" || nextSort === "white" || nextSort === "black" || nextSort === "eco"
+        ? nextSort
+        : "date_desc"
+    );
+    setPlayer(asString(query.player));
+    setEco(asString(query.eco));
+    setOpeningPrefix(asString(query.openingPrefix));
+    setEventFilter(asString(query.event));
+    setSiteFilter(asString(query.site));
+    setResult(asString(query.result));
+    setTimeControl(asString(query.timeControl));
+    setRated(query.rated === true || query.rated === "true" ? "true" : query.rated === false || query.rated === "false" ? "false" : "");
+    setFromDate(asString(query.fromDate));
+    setToDate(asString(query.toDate));
+    setWhiteEloMin(asNumberString(query.whiteEloMin));
+    setWhiteEloMax(asNumberString(query.whiteEloMax));
+    setBlackEloMin(asNumberString(query.blackEloMin));
+    setBlackEloMax(asNumberString(query.blackEloMax));
+    setAvgEloMin(asNumberString(query.avgEloMin));
+    setAvgEloMax(asNumberString(query.avgEloMax));
+    setCollectionId(asId(query.collectionId));
+    setTagId(asId(query.tagId));
+    setPositionFen(asString(query.positionFen));
+    setActiveSavedFilterId(source?.savedFilterId ?? null);
+    setPage(1);
+    clearSelection();
+    toasts.pushToast({ kind: "success", message: `Applied filter: ${label}` });
+  }
+
   function clearFilters(): void {
     setSort("date_desc");
     setPlayer("");
     setEco("");
     setOpeningPrefix("");
     setEventFilter("");
+    setSiteFilter("");
     setResult("");
+    setTimeControl("");
+    setRated("");
     setFromDate("");
     setToDate("");
     setWhiteEloMin("");
     setWhiteEloMax("");
     setBlackEloMin("");
     setBlackEloMax("");
+    setAvgEloMin("");
+    setAvgEloMax("");
     setCollectionId("");
     setTagId("");
     setPositionFen("");
+    setActiveSavedFilterId(null);
     setPage(1);
     clearSelection();
   }
@@ -669,6 +803,54 @@ export default function GamesPage() {
             Insert sample game
           </button>
           <Link href="/import">Import PGN</Link>
+        </div>
+      </section>
+
+      <IndexStatusPanel compact />
+
+      <section className="card">
+        <div className="section-head">
+          <div>
+            <h2>Prep Shortcuts</h2>
+            <p className="muted">Apply built-in presets or your saved filters directly to the main game table.</p>
+          </div>
+          <div className="button-row">
+            <Link href="/filters">Manage filters</Link>
+            <Link
+              href={
+                collectionId !== ""
+                  ? `/reports?collectionId=${collectionId}`
+                  : activeSavedFilterId
+                    ? `/reports?savedFilterId=${activeSavedFilterId}`
+                    : "/reports"
+              }
+            >
+              Prep reports
+            </Link>
+          </div>
+        </div>
+        <h3>Built-in presets</h3>
+        <div className="button-row">
+          {filterPresets.data?.map((preset) => (
+            <button key={preset.id} type="button" onClick={() => applyFilterQuery(preset.query, preset.name)}>
+              {preset.name}
+            </button>
+          ))}
+          {filterPresets.isLoading ? <span className="muted">Loading presets...</span> : null}
+        </div>
+        <h3 style={{ marginTop: 14 }}>Saved filters</h3>
+        <div className="button-row">
+          {savedFilters.data?.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              onClick={() => applyFilterQuery(filter.query, filter.name, { savedFilterId: filter.id })}
+            >
+              {filter.name}
+            </button>
+          ))}
+          {savedFilters.isLoading ? <span className="muted">Loading saved filters...</span> : null}
+          {savedFilters.data?.length === 0 ? <span className="muted">No saved filters yet.</span> : null}
         </div>
       </section>
 
@@ -727,6 +909,10 @@ export default function GamesPage() {
                     <input value={eventFilter} onChange={(event) => setEventFilter(event.target.value)} placeholder="World Championship" />
                   </label>
                   <label>
+                    Site
+                    <input value={siteFilter} onChange={(event) => setSiteFilter(event.target.value)} placeholder="Moscow" />
+                  </label>
+                  <label>
                     ECO (exact)
                     <input value={eco} onChange={(event) => setEco(event.target.value)} placeholder="B44" />
                   </label>
@@ -737,6 +923,18 @@ export default function GamesPage() {
                   <label>
                     Result
                     <input value={result} onChange={(event) => setResult(event.target.value)} placeholder="1-0" />
+                  </label>
+                  <label>
+                    Time control
+                    <input value={timeControl} onChange={(event) => setTimeControl(event.target.value)} placeholder="40/7200:3600" />
+                  </label>
+                  <label>
+                    Rated
+                    <select value={rated} onChange={(event) => setRated(event.target.value as typeof rated)}>
+                      <option value="">Either</option>
+                      <option value="true">Rated</option>
+                      <option value="false">Unrated</option>
+                    </select>
                   </label>
                   <label>
                     From date
@@ -787,7 +985,11 @@ export default function GamesPage() {
                       value={positionFen}
                       onChange={(event) => setPositionFen(event.target.value)}
                       placeholder="startpos or FEN"
+                      disabled={disablePositionFilter}
                     />
+                    {disablePositionFilter ? (
+                      <span className="muted">Position filtering is disabled until position indexing finishes.</span>
+                    ) : null}
                   </label>
                 </div>
               </section>
@@ -842,6 +1044,28 @@ export default function GamesPage() {
                       max="4000"
                       value={blackEloMax}
                       onChange={(event) => setBlackEloMax(event.target.value)}
+                      placeholder="2800"
+                    />
+                  </label>
+                  <label>
+                    Avg Elo min
+                    <input
+                      type="number"
+                      min="1"
+                      max="4000"
+                      value={avgEloMin}
+                      onChange={(event) => setAvgEloMin(event.target.value)}
+                      placeholder="2200"
+                    />
+                  </label>
+                  <label>
+                    Avg Elo max
+                    <input
+                      type="number"
+                      min="1"
+                      max="4000"
+                      value={avgEloMax}
+                      onChange={(event) => setAvgEloMax(event.target.value)}
                       placeholder="2800"
                     />
                   </label>

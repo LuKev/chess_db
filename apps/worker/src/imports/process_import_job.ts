@@ -1,13 +1,21 @@
 import { parse } from "@mliebelt/pgn-parser";
 import type { Pool } from "pg";
+import type { PositionBackfillQueue } from "../infrastructure/queue.js";
 import type { ObjectStorage } from "../infrastructure/storage.js";
-import { buildPositionIndex } from "../chess/index_positions.js";
 import { iterateLinesFromStream, iteratePgnGames } from "./pgn_stream.js";
 import { buildCanonicalPgnHash, normalizeParsedGame } from "./transform.js";
+import {
+  markImportJobIndexQueued,
+  markImportJobIndexSkipped,
+  markPendingImportJobsFailed,
+  markUserIndexFailed,
+  markUserIndexQueued,
+} from "../backfill/status.js";
 
 type ProcessImportJobParams = {
   pool: Pool;
   storage: ObjectStorage;
+  positionBackfillQueue: PositionBackfillQueue;
   importJobId: number;
   userId: number;
 };
@@ -172,140 +180,6 @@ async function insertGame(
       [gameId, JSON.stringify(params.parsedGame.moveTree)]
     );
 
-    const positionRows = buildPositionIndex(
-      params.parsedGame.startingFen,
-      params.parsedGame.mainlineSan
-    );
-
-    for (const position of positionRows) {
-      await client.query(
-        `INSERT INTO game_positions (
-          user_id,
-          game_id,
-          ply,
-          fen_norm,
-          stm,
-          castling,
-          ep_square,
-          halfmove,
-          fullmove,
-          material_key,
-          next_move_uci,
-          next_fen_norm
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
-        )
-        ON CONFLICT (user_id, game_id, ply)
-        DO UPDATE SET
-          fen_norm = EXCLUDED.fen_norm,
-          stm = EXCLUDED.stm,
-          castling = EXCLUDED.castling,
-          ep_square = EXCLUDED.ep_square,
-          halfmove = EXCLUDED.halfmove,
-          fullmove = EXCLUDED.fullmove,
-          material_key = EXCLUDED.material_key,
-          next_move_uci = EXCLUDED.next_move_uci,
-          next_fen_norm = EXCLUDED.next_fen_norm`,
-        [
-          params.userId,
-          gameId,
-          position.ply,
-          position.fenNorm,
-          position.stm,
-          position.castling,
-          position.epSquare,
-          position.halfmove,
-          position.fullmove,
-          position.materialKey,
-          position.nextMoveUci,
-          position.nextFenNorm,
-        ]
-      );
-    }
-
-    const whiteScore =
-      params.parsedGame.result === "1-0"
-        ? 1
-        : params.parsedGame.result === "0-1"
-          ? 0
-          : params.parsedGame.result === "1/2-1/2"
-            ? 0.5
-            : null;
-    const avgElo =
-      params.parsedGame.whiteElo && params.parsedGame.blackElo
-        ? (params.parsedGame.whiteElo + params.parsedGame.blackElo) / 2
-        : null;
-
-    for (const position of positionRows) {
-      if (!position.nextMoveUci) {
-        continue;
-      }
-
-      await client.query(
-        `INSERT INTO opening_stats (
-          user_id,
-          position_fen_norm,
-          move_uci,
-          next_fen_norm,
-          games,
-          white_wins,
-          black_wins,
-          draws,
-          avg_elo,
-          performance,
-          transpositions,
-          updated_at
-        ) VALUES (
-          $1, $2, $3, $4, 1, $5, $6, $7, $8, $9, 0, NOW()
-        )
-        ON CONFLICT (user_id, position_fen_norm, move_uci)
-        DO UPDATE SET
-          next_fen_norm = COALESCE(opening_stats.next_fen_norm, EXCLUDED.next_fen_norm),
-          games = opening_stats.games + 1,
-          white_wins = opening_stats.white_wins + EXCLUDED.white_wins,
-          black_wins = opening_stats.black_wins + EXCLUDED.black_wins,
-          draws = opening_stats.draws + EXCLUDED.draws,
-          avg_elo = CASE
-            WHEN EXCLUDED.avg_elo IS NULL THEN opening_stats.avg_elo
-            WHEN opening_stats.avg_elo IS NULL THEN EXCLUDED.avg_elo
-            ELSE ROUND(
-              ((opening_stats.avg_elo * opening_stats.games) + EXCLUDED.avg_elo)
-                / (opening_stats.games + 1),
-              2
-            )
-          END,
-          performance = CASE
-            WHEN EXCLUDED.performance IS NULL THEN opening_stats.performance
-            WHEN opening_stats.performance IS NULL THEN EXCLUDED.performance
-            ELSE ROUND(
-              ((opening_stats.performance * opening_stats.games) + EXCLUDED.performance)
-                / (opening_stats.games + 1),
-              2
-            )
-          END,
-          transpositions = opening_stats.transpositions
-            + CASE
-                WHEN opening_stats.next_fen_norm IS NOT NULL
-                 AND EXCLUDED.next_fen_norm IS NOT NULL
-                 AND opening_stats.next_fen_norm <> EXCLUDED.next_fen_norm
-                THEN 1
-                ELSE 0
-              END,
-          updated_at = NOW()`,
-        [
-          params.userId,
-          position.fenNorm,
-          position.nextMoveUci,
-          position.nextFenNorm,
-          params.parsedGame.result === "1-0" ? 1 : 0,
-          params.parsedGame.result === "0-1" ? 1 : 0,
-          params.parsedGame.result === "1/2-1/2" ? 1 : 0,
-          avgElo,
-          whiteScore === null ? null : whiteScore * 100,
-        ]
-      );
-    }
-
     await client.query("COMMIT");
     return "inserted";
   } catch (error) {
@@ -432,6 +306,50 @@ export async function processImportJob(
       status: finalStatus,
       counters,
     });
+
+    if (counters.inserted > 0) {
+      try {
+        await markImportJobIndexQueued(params.pool, {
+          importJobId: params.importJobId,
+          kinds: ["position", "opening"],
+        });
+        await markUserIndexQueued(params.pool, {
+          userId: params.userId,
+          kinds: ["position", "opening"],
+        });
+        await params.positionBackfillQueue.enqueuePositionBackfill({
+          userId: params.userId,
+        });
+      } catch (error) {
+        const message = String(error);
+        await markPendingImportJobsFailed(params.pool, {
+          userId: params.userId,
+          kind: "position",
+          error: message,
+        });
+        await markPendingImportJobsFailed(params.pool, {
+          userId: params.userId,
+          kind: "opening",
+          error: message,
+        });
+        await markUserIndexFailed(params.pool, {
+          userId: params.userId,
+          kind: "position",
+          error: message,
+        });
+        await markUserIndexFailed(params.pool, {
+          userId: params.userId,
+          kind: "opening",
+          error: message,
+        });
+        throw error;
+      }
+    } else {
+      await markImportJobIndexSkipped(params.pool, {
+        importJobId: params.importJobId,
+        kinds: ["position", "opening"],
+      });
+    }
   } catch (fatalError) {
     counters.parseErrors += 1;
 

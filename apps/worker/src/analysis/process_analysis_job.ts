@@ -1,19 +1,10 @@
-import { spawn } from "node:child_process";
-import readline from "node:readline";
 import type { Pool } from "pg";
-
-type AnalysisLimits = {
-  depth: number | null;
-  nodes: number | null;
-  timeMs: number | null;
-};
-
-type AnalysisResult = {
-  bestMove: string;
-  pv: string | null;
-  evalCp: number | null;
-  evalMate: number | null;
-};
+import {
+  persistableLinesFromAnalysis,
+  replaceEngineLinesForPosition,
+  serializeResultLines,
+} from "./persistence.js";
+import { runStockfishAnalysis } from "./stockfish.js";
 
 type ProcessAnalysisJobParams = {
   pool: Pool;
@@ -28,22 +19,6 @@ function toId(value: number | string): number {
     return value;
   }
   return Number(value);
-}
-
-function parseScoreFromInfo(line: string): {
-  evalCp: number | null;
-  evalMate: number | null;
-  pv: string | null;
-} {
-  const cpMatch = line.match(/\bscore\s+cp\s+(-?\d+)/);
-  const mateMatch = line.match(/\bscore\s+mate\s+(-?\d+)/);
-  const pvMatch = line.match(/\bpv\s+(.+)$/);
-
-  return {
-    evalCp: cpMatch ? Number(cpMatch[1]) : null,
-    evalMate: mateMatch ? Number(mateMatch[1]) : null,
-    pv: pvMatch ? pvMatch[1].trim() : null,
-  };
 }
 
 async function isCancelRequested(pool: Pool, analysisRequestId: number): Promise<boolean> {
@@ -61,153 +36,6 @@ async function isCancelRequested(pool: Pool, analysisRequestId: number): Promise
   return row.rows[0].cancel_requested || row.rows[0].status === "cancelled";
 }
 
-async function runStockfishAnalysis(params: {
-  stockfishBinary: string;
-  fen: string;
-  limits: AnalysisLimits;
-  onCancelPoll: () => Promise<boolean>;
-  onInfo: (info: {
-    evalCp: number | null;
-    evalMate: number | null;
-    pv: string | null;
-  }) => Promise<void>;
-  cancelPollMs: number;
-}): Promise<AnalysisResult | { cancelled: true }> {
-  const child = spawn(params.stockfishBinary, [], {
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  let lastInfo: { evalCp: number | null; evalMate: number | null; pv: string | null } = {
-    evalCp: null,
-    evalMate: null,
-    pv: null,
-  };
-
-  let resolved = false;
-
-  return new Promise((resolve, reject) => {
-    const rl = readline.createInterface({
-      input: child.stdout,
-      crlfDelay: Infinity,
-    });
-
-    const closeAll = (): void => {
-      rl.close();
-      if (!child.killed) {
-        child.kill();
-      }
-      if (cancelInterval) {
-        clearInterval(cancelInterval);
-      }
-      if (analysisTimeout) {
-        clearTimeout(analysisTimeout);
-      }
-    };
-
-    const writeLine = (command: string): void => {
-      child.stdin.write(`${command}\n`);
-    };
-
-    const analysisTimeout = setTimeout(() => {
-      if (resolved) {
-        return;
-      }
-      resolved = true;
-      closeAll();
-      reject(new Error("Stockfish analysis timed out"));
-    }, 45_000);
-
-    const cancelInterval = setInterval(() => {
-      void (async () => {
-        const shouldCancel = await params.onCancelPoll();
-        if (shouldCancel && !resolved) {
-          writeLine("stop");
-        }
-      })();
-    }, params.cancelPollMs);
-
-    rl.on("line", (line) => {
-      if (line.startsWith("info ")) {
-        const parsed = parseScoreFromInfo(line);
-        if (parsed.evalCp !== null || parsed.evalMate !== null || parsed.pv) {
-          lastInfo = parsed;
-          void params.onInfo(parsed);
-        }
-      }
-
-      if (line.startsWith("bestmove ")) {
-        const bestMove = line.split(/\s+/)[1];
-
-        if (!bestMove || bestMove === "(none)") {
-          if (!resolved) {
-            resolved = true;
-            closeAll();
-            resolve({ cancelled: true });
-          }
-          return;
-        }
-
-        if (!resolved) {
-          resolved = true;
-          closeAll();
-          resolve({
-            bestMove,
-            pv: lastInfo.pv,
-            evalCp: lastInfo.evalCp,
-            evalMate: lastInfo.evalMate,
-          });
-        }
-      }
-    });
-
-    child.stderr.on("data", (chunk) => {
-      const value = String(chunk);
-      if (value.trim().length > 0 && !resolved) {
-        resolved = true;
-        closeAll();
-        reject(new Error(`Stockfish stderr: ${value.trim()}`));
-      }
-    });
-
-    child.on("error", (error) => {
-      if (!resolved) {
-        resolved = true;
-        closeAll();
-        reject(error);
-      }
-    });
-
-    child.on("exit", (code) => {
-      if (!resolved && code !== 0) {
-        resolved = true;
-        closeAll();
-        reject(new Error(`Stockfish exited with code ${code}`));
-      }
-    });
-
-    writeLine("uci");
-    writeLine("isready");
-    writeLine("ucinewgame");
-    writeLine(`position fen ${params.fen}`);
-
-    const goParts: string[] = ["go"];
-    if (params.limits.depth) {
-      goParts.push("depth", String(params.limits.depth));
-    }
-    if (params.limits.nodes) {
-      goParts.push("nodes", String(params.limits.nodes));
-    }
-    if (params.limits.timeMs) {
-      goParts.push("movetime", String(params.limits.timeMs));
-    }
-    if (goParts.length === 1) {
-      goParts.push("depth", "18");
-    }
-
-    writeLine(goParts.join(" "));
-  });
-}
-
 export async function processAnalysisJob(
   params: ProcessAnalysisJobParams
 ): Promise<void> {
@@ -217,9 +45,15 @@ export async function processAnalysisJob(
     status: string;
     cancel_requested: boolean;
     fen: string;
+    engine: string;
+    multipv: number;
     depth: number | null;
     nodes: number | null;
     time_ms: number | null;
+    game_id: number | string | null;
+    ply: number | null;
+    auto_store: boolean;
+    source: string;
   }>(
     `SELECT
       id,
@@ -227,9 +61,15 @@ export async function processAnalysisJob(
       status,
       cancel_requested,
       fen,
+      engine,
+      multipv,
       depth,
       nodes,
-      time_ms
+      time_ms,
+      game_id,
+      ply,
+      auto_store,
+      source
     FROM engine_requests
     WHERE id = $1`,
     [params.analysisRequestId]
@@ -267,27 +107,37 @@ export async function processAnalysisJob(
     const result = await runStockfishAnalysis({
       stockfishBinary: params.stockfishBinary,
       fen: request.fen,
+      engine: request.engine,
+      multipv: request.multipv ?? 1,
       limits: {
         depth: request.depth,
         nodes: request.nodes,
         timeMs: request.time_ms,
       },
       onCancelPoll: async () => isCancelRequested(params.pool, params.analysisRequestId),
-      onInfo: async (info) => {
+      onInfo: async (lines) => {
         const now = Date.now();
         if (now - lastInfoPersistMs < 500) {
           return;
         }
         lastInfoPersistMs = now;
+        const primary = lines.find((line) => line.multipv === 1) ?? lines[0] ?? null;
 
         await params.pool.query(
           `UPDATE engine_requests
            SET principal_variation = $2,
                eval_cp = $3,
                eval_mate = $4,
+               result_lines = $5::jsonb,
                updated_at = NOW()
            WHERE id = $1 AND status = 'running'`,
-          [params.analysisRequestId, info.pv, info.evalCp, info.evalMate]
+          [
+            params.analysisRequestId,
+            primary?.pv ?? null,
+            primary?.evalCp ?? null,
+            primary?.evalMate ?? null,
+            JSON.stringify(serializeResultLines(lines)),
+          ]
         );
       },
       cancelPollMs: params.cancelPollMs,
@@ -311,16 +161,35 @@ export async function processAnalysisJob(
            principal_variation = $3,
            eval_cp = $4,
            eval_mate = $5,
+           result_lines = $6::jsonb,
            updated_at = NOW()
        WHERE id = $1`,
       [
         params.analysisRequestId,
         result.bestMove,
-        result.pv,
-        result.evalCp,
-        result.evalMate,
+        result.lines[0]?.pv ?? null,
+        result.lines[0]?.evalCp ?? null,
+        result.lines[0]?.evalMate ?? null,
+        JSON.stringify(serializeResultLines(result.lines)),
       ]
     );
+
+    if (request.auto_store && request.game_id !== null && request.ply !== null) {
+      await replaceEngineLinesForPosition({
+        pool: params.pool,
+        userId: params.userId,
+        gameId: toId(request.game_id),
+        ply: request.ply,
+        fen: request.fen,
+        engine: request.engine,
+        depth: request.depth,
+        source: request.source,
+        lines: persistableLinesFromAnalysis(request.fen, result.lines, {
+          nodes: request.nodes,
+          timeMs: request.time_ms,
+        }),
+      });
+    }
   } catch (error) {
     await params.pool.query(
       `UPDATE engine_requests

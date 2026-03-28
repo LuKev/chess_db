@@ -513,6 +513,42 @@ export async function registerGameRoutes(
         blackElo: payload.blackElo ?? null,
       });
 
+      const totalGamesResult = await client.query<{ total: string }>(
+        `SELECT COUNT(*)::text AS total
+         FROM games
+         WHERE user_id = $1`,
+        [request.user!.id]
+      );
+      const totalGames = Number(totalGamesResult.rows[0]?.total ?? "0");
+      await client.query(
+        `INSERT INTO user_index_status (
+          user_id,
+          position_status,
+          position_last_completed_at,
+          position_last_error,
+          position_indexed_games,
+          opening_status,
+          opening_last_completed_at,
+          opening_last_error,
+          opening_indexed_games,
+          updated_at
+        ) VALUES (
+          $1, 'indexed', NOW(), NULL, $2, 'indexed', NOW(), NULL, $2, NOW()
+        )
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          position_status = 'indexed',
+          position_last_completed_at = NOW(),
+          position_last_error = NULL,
+          position_indexed_games = EXCLUDED.position_indexed_games,
+          opening_status = 'indexed',
+          opening_last_completed_at = NOW(),
+          opening_last_error = NULL,
+          opening_indexed_games = EXCLUDED.opening_indexed_games,
+          updated_at = NOW()`,
+        [request.user!.id, totalGames]
+      );
+
       await client.query("COMMIT");
       return reply.status(201).send({ id: gameId });
     } catch (error) {

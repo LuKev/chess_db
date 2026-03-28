@@ -34,6 +34,14 @@ type AnnotationResponse = {
   moveNotes: Record<string, unknown>;
 };
 
+type MoveNoteDraft = {
+  comment: string;
+  nagsText: string;
+  highlightsText: string;
+  arrowsText: string;
+  variationNote: string;
+};
+
 type EngineLine = {
   id: number;
   ply: number;
@@ -67,6 +75,14 @@ type AnalysisStatusResponse = {
   id: number;
   status: string;
   fen: string;
+  engine: string;
+  multipv: number;
+  context: {
+    gameId: number | null;
+    ply: number | null;
+    autoStore: boolean;
+    source: string;
+  };
   limits: {
     depth: number | null;
     nodes: number | null;
@@ -77,15 +93,50 @@ type AnalysisStatusResponse = {
     pv: string | null;
     evalCp: number | null;
     evalMate: number | null;
+    lines: Array<{
+      multipv: number;
+      bestMove: string | null;
+      pv: string | null;
+      evalCp: number | null;
+      evalMate: number | null;
+    }>;
   };
   error: string | null;
   createdAt: string;
   updatedAt: string;
 };
 
+type GameAnalysisJob = {
+  id: number;
+  status: string;
+  engine: string;
+  depth: number | null;
+  nodes: number | null;
+  timeMs: number | null;
+  multipv: number;
+  startPly: number;
+  endPly: number | null;
+  processedPositions: number;
+  storedLines: number;
+  cancelRequested: boolean;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type GameAnalysisJobsResponse = {
+  gameId: number;
+  items: GameAnalysisJob[];
+};
+
 type BoardSquare = {
   square: string;
   piece: { type: PieceSymbol; color: "w" | "b" } | null;
+};
+
+type BoardArrow = {
+  from: string;
+  to: string;
 };
 
 function buildBoard(chess: Chess): BoardSquare[][] {
@@ -119,6 +170,122 @@ function buildNotationRows(sans: string[]): NotationRow[] {
   return rows;
 }
 
+function parseTextList(value: string): string[] {
+  return value
+    .split(/[,\s]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseMoveNote(raw: unknown): MoveNoteDraft {
+  const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const nags = Array.isArray(value.nags)
+    ? value.nags.filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry))
+    : [];
+  const highlights = Array.isArray(value.highlights)
+    ? value.highlights.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const arrows = Array.isArray(value.arrows)
+    ? value.arrows.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  return {
+    comment: typeof value.comment === "string" ? value.comment : "",
+    nagsText: nags.join(", "),
+    highlightsText: highlights.join(" "),
+    arrowsText: arrows.join(" "),
+    variationNote: typeof value.variationNote === "string" ? value.variationNote : "",
+  };
+}
+
+function emptyMoveNote(): MoveNoteDraft {
+  return {
+    comment: "",
+    nagsText: "",
+    highlightsText: "",
+    arrowsText: "",
+    variationNote: "",
+  };
+}
+
+function serializeMoveNote(draft: MoveNoteDraft): Record<string, unknown> | null {
+  const nags = parseTextList(draft.nagsText)
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value >= 1 && value <= 255);
+  const highlights = parseTextList(draft.highlightsText).filter((value) => /^[a-h][1-8]$/i.test(value));
+  const arrows = parseTextList(draft.arrowsText).filter((value) => /^[a-h][1-8][a-h][1-8]$/i.test(value));
+  const next = {
+    comment: draft.comment.trim(),
+    nags,
+    highlights: highlights.map((value) => value.toLowerCase()),
+    arrows: arrows.map((value) => value.toLowerCase()),
+    variationNote: draft.variationNote.trim(),
+  };
+
+  if (!next.comment && next.nags.length === 0 && next.highlights.length === 0 && next.arrows.length === 0 && !next.variationNote) {
+    return null;
+  }
+
+  return next;
+}
+
+function formatEval(evalCp: number | null, evalMate: number | null): string {
+  if (evalMate !== null) {
+    return `#${evalMate}`;
+  }
+  if (evalCp !== null) {
+    return (evalCp / 100).toFixed(2);
+  }
+  return "-";
+}
+
+function parseBoardArrows(values: string[]): BoardArrow[] {
+  return values
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => /^[a-h][1-8][a-h][1-8]$/.test(value))
+    .map((value) => ({
+      from: value.slice(0, 2),
+      to: value.slice(2, 4),
+    }));
+}
+
+function squareCenter(square: string): { x: number; y: number } {
+  const file = "abcdefgh".indexOf(square[0] ?? "");
+  const rank = Number(square[1] ?? "0");
+  return {
+    x: file * 12.5 + 6.25,
+    y: (8 - rank) * 12.5 + 6.25,
+  };
+}
+
+function pvSanText(fen: string, pv: string | null): string {
+  if (!pv) {
+    return "-";
+  }
+  try {
+    const chess = new Chess();
+    chess.load(fen);
+    const san: string[] = [];
+    for (const token of pv.split(/\s+/g).filter(Boolean)) {
+      const match = token.trim().toLowerCase().match(/^([a-h][1-8])([a-h][1-8])([qrbn])?$/);
+      if (!match) {
+        break;
+      }
+      const move = chess.move({
+        from: match[1],
+        to: match[2],
+        promotion: match[3] as "q" | "r" | "b" | "n" | undefined,
+      });
+      if (!move) {
+        break;
+      }
+      san.push(move.san);
+    }
+    return san.length > 0 ? san.join(" ") : pv;
+  } catch {
+    return pv;
+  }
+}
+
 export default function GameViewerPage() {
   const params = useParams<{ gameId: string }>();
   const gameId = Number(params.gameId);
@@ -127,12 +294,17 @@ export default function GameViewerPage() {
   const toasts = useToasts();
 
   const [rootComment, setRootComment] = useState("");
+  const [moveNote, setMoveNote] = useState<MoveNoteDraft>(emptyMoveNote());
   const [annotationStatus, setAnnotationStatus] = useState("Load annotations to start.");
   const [annotationDirty, setAnnotationDirty] = useState(false);
   const [analysisDepth, setAnalysisDepth] = useState(18);
+  const [analysisMultiPv, setAnalysisMultiPv] = useState(1);
   const [analysisRequestId, setAnalysisRequestId] = useState<number | null>(null);
   const [analysisStatus, setAnalysisStatus] = useState<string>("No analysis request yet.");
   const [analysisResult, setAnalysisResult] = useState<AnalysisStatusResponse | null>(null);
+  const [gameAnalysisStartPly, setGameAnalysisStartPly] = useState(0);
+  const [gameAnalysisEndPly, setGameAnalysisEndPly] = useState("");
+  const [gameAnalysisStatus, setGameAnalysisStatus] = useState("No background game analysis yet.");
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -200,8 +372,9 @@ export default function GameViewerPage() {
     const existing = annotations.data.annotations;
     const comment = typeof existing.comment === "string" ? existing.comment : "";
     setRootComment(comment);
+    setMoveNote(parseMoveNote(annotations.data.moveNotes?.[String(cursor)]));
     setAnnotationStatus("Annotations loaded.");
-  }, [annotations.data, annotationDirty]);
+  }, [annotations.data, annotationDirty, cursor]);
 
   const engineLines = useQuery({
     queryKey: ["engine-lines", { gameId, ply: cursor }],
@@ -220,6 +393,49 @@ export default function GameViewerPage() {
       throw new Error(msg);
     },
   });
+
+  const gameAnalysisJobs = useQuery({
+    queryKey: ["game-analysis-jobs", { gameId }],
+    enabled: Number.isFinite(gameId) && gameId > 0,
+    refetchInterval: 2000,
+    queryFn: async (): Promise<GameAnalysisJobsResponse> => {
+      const response = await fetchJson<GameAnalysisJobsResponse>(`/api/games/${gameId}/analysis-jobs`, {
+        method: "GET",
+      });
+      if (response.status === 200 && "items" in response.data) {
+        return response.data;
+      }
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to load game analysis jobs (status ${response.status})`;
+      throw new Error(msg);
+    },
+  });
+
+  useEffect(() => {
+    const runningJob = gameAnalysisJobs.data?.items.find(
+      (job) => job.status === "queued" || job.status === "running"
+    );
+    const latestJob = gameAnalysisJobs.data?.items[0];
+    if (runningJob) {
+      setGameAnalysisStatus(
+        `Game analysis #${runningJob.id} ${runningJob.status}: ${runningJob.processedPositions} positions, ${runningJob.storedLines} stored lines.`
+      );
+      return;
+    }
+    if (latestJob) {
+      if (latestJob.status === "completed") {
+        setGameAnalysisStatus(
+          `Latest game analysis #${latestJob.id} completed with ${latestJob.processedPositions} positions and ${latestJob.storedLines} stored lines.`
+        );
+      } else if (latestJob.status === "failed") {
+        setGameAnalysisStatus(`Game analysis #${latestJob.id} failed: ${latestJob.error ?? "unknown error"}`);
+      } else if (latestJob.status === "cancelled") {
+        setGameAnalysisStatus(`Game analysis #${latestJob.id} cancelled.`);
+      }
+    }
+  }, [gameAnalysisJobs.data]);
 
   useEffect(() => {
     if (!analysisRequestId) {
@@ -296,6 +512,14 @@ export default function GameViewerPage() {
     };
   }, [cursor, game.data?.startingFen, game.data?.moveTree]);
 
+  const activeMoveNote = annotationDirty
+    ? moveNote
+    : parseMoveNote(annotations.data?.moveNotes?.[String(cursor)]);
+  const activeHighlights = parseTextList(activeMoveNote.highlightsText).map((value) => value.toLowerCase());
+  const activeArrows = parseTextList(activeMoveNote.arrowsText).map((value) => value.toLowerCase());
+  const activeArrowPairs = parseBoardArrows(activeArrows);
+  const savedMoveNotes = annotations.data?.moveNotes ?? {};
+
   async function runAnalysis(): Promise<void> {
     if (!derived.fen) {
       return;
@@ -307,6 +531,10 @@ export default function GameViewerPage() {
       body: JSON.stringify({
         fen: derived.fen,
         depth: analysisDepth,
+        multipv: analysisMultiPv,
+        gameId,
+        ply: cursor,
+        source: "viewer",
       }),
     });
     if ((response.status !== 201 && response.status !== 200) || !("id" in response.data)) {
@@ -341,27 +569,29 @@ export default function GameViewerPage() {
     setAnalysisStatus(`Cancel requested (status: ${response.data.status}).`);
   }
 
-  async function saveAnalysisLine(): Promise<void> {
+  async function saveAnalysisLine(targetLine?: AnalysisStatusResponse["result"]["lines"][number]): Promise<void> {
     if (!analysisResult || analysisResult.status !== "completed") {
       return;
     }
-    const pvUci = analysisResult.result.pv ? analysisResult.result.pv.split(/\s+/g).filter(Boolean) : [];
+    const selectedLine = targetLine ?? analysisResult.result.lines[0];
+    const pvString = selectedLine?.pv ?? analysisResult.result.pv;
+    const pvUci = pvString ? pvString.split(/\s+/g).filter(Boolean) : [];
     const response = await fetchJson<{ id: number; createdAt: string }>("/api/analysis/store", {
       method: "POST",
       body: JSON.stringify({
         gameId,
         ply: cursor,
         fen: analysisResult.fen,
-        engine: "stockfish",
+        engine: analysisResult.engine,
         depth: analysisResult.limits.depth ?? analysisDepth,
-        multipv: 1,
+        multipv: selectedLine?.multipv ?? analysisResult.multipv ?? 1,
         pvUci,
         pvSan: [],
-        evalCp: analysisResult.result.evalCp ?? undefined,
-        evalMate: analysisResult.result.evalMate ?? undefined,
+        evalCp: selectedLine?.evalCp ?? analysisResult.result.evalCp ?? undefined,
+        evalMate: selectedLine?.evalMate ?? analysisResult.result.evalMate ?? undefined,
         nodes: analysisResult.limits.nodes ?? undefined,
         timeMs: analysisResult.limits.timeMs ?? undefined,
-        source: "manual",
+        source: "viewer",
       }),
     });
     if (response.status !== 201) {
@@ -374,6 +604,49 @@ export default function GameViewerPage() {
     }
     toasts.pushToast({ kind: "success", message: "Saved engine line" });
     await queryClient.invalidateQueries({ queryKey: ["engine-lines", { gameId, ply: cursor }] });
+  }
+
+  async function queueGameAnalysis(): Promise<void> {
+    setGameAnalysisStatus("Queueing background game analysis...");
+    const response = await fetchJson<{ id: number; status: string }>(`/api/games/${gameId}/analysis-jobs`, {
+      method: "POST",
+      body: JSON.stringify({
+        depth: analysisDepth,
+        multipv: analysisMultiPv,
+        startPly: gameAnalysisStartPly,
+        endPly: gameAnalysisEndPly.length > 0 ? Number(gameAnalysisEndPly) : undefined,
+      }),
+    });
+    if (response.status !== 201 || !("id" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to queue game analysis (status ${response.status})`;
+      setGameAnalysisStatus(msg);
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    setGameAnalysisStatus(`Queued background game analysis #${response.data.id}.`);
+    toasts.pushToast({ kind: "success", message: `Queued game analysis #${response.data.id}` });
+    await gameAnalysisJobs.refetch();
+  }
+
+  async function cancelGameAnalysis(jobId: number): Promise<void> {
+    const response = await fetchJson<{ id: number; status: string }>(
+      `/api/games/${gameId}/analysis-jobs/${jobId}/cancel`,
+      { method: "POST" }
+    );
+    if (response.status !== 200 || !("status" in response.data)) {
+      const msg =
+        "error" in response.data && response.data.error
+          ? response.data.error
+          : `Failed to cancel game analysis (status ${response.status})`;
+      setGameAnalysisStatus(msg);
+      toasts.pushToast({ kind: "error", message: msg });
+      return;
+    }
+    setGameAnalysisStatus(`Game analysis #${jobId} ${response.data.status}.`);
+    await gameAnalysisJobs.refetch();
   }
 
   async function saveAnnotations(): Promise<void> {
@@ -390,7 +663,12 @@ export default function GameViewerPage() {
           comment: rootComment,
           cursor,
         },
-        moveNotes: annotations.data.moveNotes ?? {},
+        moveNotes: {
+          ...(annotations.data.moveNotes ?? {}),
+          ...(serializeMoveNote(moveNote)
+            ? { [String(cursor)]: serializeMoveNote(moveNote) }
+            : Object.fromEntries(Object.entries(annotations.data.moveNotes ?? {}).filter(([ply]) => ply !== String(cursor)))),
+        },
       }),
     });
 
@@ -477,7 +755,7 @@ export default function GameViewerPage() {
 
         <div className="viewer-grid">
           <div>
-            <div className="board">
+            <div className="board board-annotated">
               {derived.board.map((rank, rankIndex) => (
                 <div key={`rank-${rankIndex}`} className="board-rank">
                   {rank.map((sq) => (
@@ -485,12 +763,40 @@ export default function GameViewerPage() {
                       key={sq.square}
                       className={`square ${(rankIndex + "abcdefgh".indexOf(sq.square[0]!)) % 2 === 0 ? "light" : "dark"}`}
                       title={sq.square}
+                      style={activeHighlights.includes(sq.square.toLowerCase()) ? { outline: "3px solid #f4c542", outlineOffset: -3 } : undefined}
                     >
                       <ChessPiece piece={sq.piece} />
                     </div>
                   ))}
                 </div>
               ))}
+              {activeArrowPairs.length > 0 ? (
+                <svg className="board-arrows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                  <defs>
+                    <marker id="board-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d94f39" />
+                    </marker>
+                  </defs>
+                  {activeArrowPairs.map((arrow) => {
+                    const from = squareCenter(arrow.from);
+                    const to = squareCenter(arrow.to);
+                    return (
+                      <line
+                        key={`${arrow.from}-${arrow.to}`}
+                        x1={from.x}
+                        y1={from.y}
+                        x2={to.x}
+                        y2={to.y}
+                        stroke="#d94f39"
+                        strokeWidth="2.1"
+                        strokeLinecap="round"
+                        markerEnd="url(#board-arrowhead)"
+                        opacity="0.86"
+                      />
+                    );
+                  })}
+                </svg>
+              ) : null}
             </div>
             <p className="muted">
               Ply: {derived.safeCursor}/{Math.max(0, derived.fens.length - 1)}
@@ -513,6 +819,7 @@ export default function GameViewerPage() {
                     disabled={!row.white}
                   >
                     {row.white?.san ?? ""}
+                    {row.white && savedMoveNotes[String(row.white.cursor)] ? " *" : ""}
                   </button>
                   <button
                     type="button"
@@ -521,11 +828,20 @@ export default function GameViewerPage() {
                     disabled={!row.black}
                   >
                     {row.black?.san ?? ""}
+                    {row.black && savedMoveNotes[String(row.black.cursor)] ? " *" : ""}
                   </button>
                 </div>
               ))}
               {derived.rows.length === 0 ? <p className="muted">No moves parsed.</p> : null}
             </div>
+            {activeMoveNote.comment.trim() || activeMoveNote.variationNote.trim() ? (
+              <div className="games-note-preview">
+                {activeMoveNote.comment.trim() ? <p>{activeMoveNote.comment.trim()}</p> : null}
+                {activeMoveNote.variationNote.trim() ? (
+                  <p className="muted">Variation note: {activeMoveNote.variationNote.trim()}</p>
+                ) : null}
+              </div>
+            ) : null}
             <h3>PGN</h3>
             <pre className="pgn-pre">{pgn.data ?? game.data?.pgn ?? ""}</pre>
           </div>
@@ -563,6 +879,68 @@ export default function GameViewerPage() {
             placeholder="Write comments about this game..."
           />
         </label>
+        <div className="auth-grid" style={{ marginTop: 12 }}>
+          <label>
+            Move note (ply {cursor})
+            <textarea
+              rows={4}
+              value={moveNote.comment}
+              onChange={(event) => {
+                setMoveNote((current) => ({ ...current, comment: event.target.value }));
+                setAnnotationDirty(true);
+              }}
+              placeholder="Annotate the current move or position..."
+            />
+          </label>
+          <label>
+            NAGs
+            <input
+              value={moveNote.nagsText}
+              onChange={(event) => {
+                setMoveNote((current) => ({ ...current, nagsText: event.target.value }));
+                setAnnotationDirty(true);
+              }}
+              placeholder="1, 3, 14"
+            />
+          </label>
+          <label>
+            Highlights
+            <input
+              value={moveNote.highlightsText}
+              onChange={(event) => {
+                setMoveNote((current) => ({ ...current, highlightsText: event.target.value }));
+                setAnnotationDirty(true);
+              }}
+              placeholder="e4 d5"
+            />
+          </label>
+          <label>
+            Arrows
+            <input
+              value={moveNote.arrowsText}
+              onChange={(event) => {
+                setMoveNote((current) => ({ ...current, arrowsText: event.target.value }));
+                setAnnotationDirty(true);
+              }}
+              placeholder="e2e4 g1f3"
+            />
+          </label>
+        </div>
+        <label style={{ marginTop: 12 }}>
+          Variation note
+          <textarea
+            rows={3}
+            value={moveNote.variationNote}
+            onChange={(event) => {
+              setMoveNote((current) => ({ ...current, variationNote: event.target.value }));
+              setAnnotationDirty(true);
+            }}
+            placeholder="Optional note for the line at the current cursor..."
+          />
+        </label>
+        {activeArrows.length > 0 ? (
+          <p className="muted">Active arrows: {activeArrows.join(", ")}</p>
+        ) : null}
         <p className="muted">{annotationStatus}</p>
       </section>
 
@@ -585,6 +963,7 @@ export default function GameViewerPage() {
                   <th>ID</th>
                   <th>Engine</th>
                   <th>Depth</th>
+                  <th>MultiPV</th>
                   <th>Eval</th>
                   <th>PV (SAN)</th>
                   <th>Source</th>
@@ -597,12 +976,9 @@ export default function GameViewerPage() {
                     <td>{line.id}</td>
                     <td>{line.engine}</td>
                     <td>{line.depth ?? "-"}</td>
+                    <td>{line.multipv ?? 1}</td>
                     <td>
-                      {line.evalMate !== null
-                        ? `#${line.evalMate}`
-                        : line.evalCp !== null
-                          ? `${(line.evalCp / 100).toFixed(2)}`
-                          : "-"}
+                      {formatEval(line.evalCp, line.evalMate)}
                     </td>
                     <td style={{ maxWidth: 420 }}>
                       {line.pvSan?.length ? line.pvSan.join(" ") : line.pvUci.join(" ")}
@@ -613,7 +989,7 @@ export default function GameViewerPage() {
                 ))}
                 {engineLines.data.items.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>No saved lines at this ply.</td>
+                    <td colSpan={8}>No saved lines at this ply.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -652,6 +1028,17 @@ export default function GameViewerPage() {
             />
           </label>
           <label>
+            Multi-PV
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={String(analysisMultiPv)}
+              onChange={(event) => setAnalysisMultiPv(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+              placeholder="1"
+            />
+          </label>
+          <label>
             Current FEN
             <input value={derived.fen} readOnly />
           </label>
@@ -659,7 +1046,129 @@ export default function GameViewerPage() {
 
         <p className="muted">{analysisStatus}</p>
         {analysisResult ? (
-          <pre className="pgn-pre">{JSON.stringify(analysisResult.result, null, 2)}</pre>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Line</th>
+                  <th>Best Move</th>
+                  <th>Eval</th>
+                  <th>PV</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {analysisResult.result.lines.map((line) => (
+                  <tr key={line.multipv}>
+                    <td>{line.multipv}</td>
+                    <td>{line.bestMove ?? "-"}</td>
+                    <td>{formatEval(line.evalCp, line.evalMate)}</td>
+                    <td style={{ maxWidth: 520 }}>{pvSanText(analysisResult.fen, line.pv)}</td>
+                    <td>
+                      <button type="button" onClick={() => void saveAnalysisLine(line)} disabled={!line.pv}>
+                        Store line
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {analysisResult.result.lines.length === 0 ? (
+                  <tr>
+                    <td colSpan={5}>No principal variations returned yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h2>Background Game Analysis</h2>
+          <div className="button-row">
+            <button type="button" onClick={() => void queueGameAnalysis()} disabled={!game.data}>
+              Analyze This Game
+            </button>
+            <button type="button" onClick={() => void gameAnalysisJobs.refetch()} disabled={gameAnalysisJobs.isFetching}>
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="auth-grid">
+          <label>
+            Start ply
+            <input
+              type="number"
+              min={0}
+              value={String(gameAnalysisStartPly)}
+              onChange={(event) => setGameAnalysisStartPly(Math.max(0, Number(event.target.value) || 0))}
+            />
+          </label>
+          <label>
+            End ply
+            <input
+              type="number"
+              min={0}
+              value={gameAnalysisEndPly}
+              onChange={(event) => setGameAnalysisEndPly(event.target.value)}
+              placeholder="Full game"
+            />
+          </label>
+        </div>
+
+        <p className="muted">{gameAnalysisStatus}</p>
+        {gameAnalysisJobs.isLoading ? <p className="muted">Loading background jobs...</p> : null}
+        {gameAnalysisJobs.isError ? <p className="muted">Error: {String(gameAnalysisJobs.error)}</p> : null}
+        {gameAnalysisJobs.data ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Status</th>
+                  <th>Depth</th>
+                  <th>MultiPV</th>
+                  <th>Ply Range</th>
+                  <th>Positions</th>
+                  <th>Stored Lines</th>
+                  <th>Updated</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {gameAnalysisJobs.data.items.map((job) => (
+                  <tr key={job.id}>
+                    <td>{job.id}</td>
+                    <td>{job.status}</td>
+                    <td>{job.depth ?? "-"}</td>
+                    <td>{job.multipv}</td>
+                    <td>
+                      {job.startPly}
+                      {job.endPly !== null ? `-${job.endPly}` : "+"}
+                    </td>
+                    <td>{job.processedPositions}</td>
+                    <td>{job.storedLines}</td>
+                    <td>{new Date(job.updatedAt).toLocaleString()}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => void cancelGameAnalysis(job.id)}
+                        disabled={!(job.status === "queued" || job.status === "running")}
+                      >
+                        Cancel
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {gameAnalysisJobs.data.items.length === 0 ? (
+                  <tr>
+                    <td colSpan={9}>No background analysis jobs for this game.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
         ) : null}
       </section>
     </main>

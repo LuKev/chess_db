@@ -603,6 +603,14 @@ export async function registerImportRoutes(
         status: string;
         source_object_key: string | null;
         strict_duplicate_mode: boolean;
+        position_index_status: string;
+        position_index_requested_at: Date | null;
+        position_index_completed_at: Date | null;
+        position_index_error: string | null;
+        opening_index_status: string;
+        opening_index_requested_at: Date | null;
+        opening_index_completed_at: Date | null;
+        opening_index_error: string | null;
         max_games: number | null;
         total_games: number;
         inserted_games: number;
@@ -618,6 +626,14 @@ export async function registerImportRoutes(
           status,
           source_object_key,
           strict_duplicate_mode,
+          position_index_status,
+          position_index_requested_at,
+          position_index_completed_at,
+          position_index_error,
+          opening_index_status,
+          opening_index_requested_at,
+          opening_index_completed_at,
+          opening_index_error,
           max_games,
           total_games,
           inserted_games,
@@ -675,6 +691,36 @@ export async function registerImportRoutes(
           gameOffset: row.game_offset,
           message: row.error_message,
         })),
+        indexing: {
+          position: {
+            rawStatus: job.position_index_status,
+            status:
+              job.position_index_status === "queued" || job.position_index_status === "running"
+                ? "indexing"
+                : job.position_index_status === "indexed"
+                  ? "indexed"
+                  : job.position_index_status === "failed"
+                    ? "failed"
+                    : "not_indexed",
+            requestedAt: job.position_index_requested_at?.toISOString() ?? null,
+            completedAt: job.position_index_completed_at?.toISOString() ?? null,
+            error: job.position_index_error,
+          },
+          opening: {
+            rawStatus: job.opening_index_status,
+            status:
+              job.opening_index_status === "queued" || job.opening_index_status === "running"
+                ? "indexing"
+                : job.opening_index_status === "indexed"
+                  ? "indexed"
+                  : job.opening_index_status === "failed"
+                    ? "failed"
+                    : "not_indexed",
+            requestedAt: job.opening_index_requested_at?.toISOString() ?? null,
+            completedAt: job.opening_index_completed_at?.toISOString() ?? null,
+            error: job.opening_index_error,
+          },
+        },
         throughputGamesPerMinute,
         createdAt: job.created_at.toISOString(),
         updatedAt: job.updated_at.toISOString(),
@@ -771,6 +817,14 @@ export async function registerImportRoutes(
       id: number | string;
       status: string;
       strict_duplicate_mode: boolean;
+      position_index_status: string;
+      position_index_requested_at: Date | null;
+      position_index_completed_at: Date | null;
+      position_index_error: string | null;
+      opening_index_status: string;
+      opening_index_requested_at: Date | null;
+      opening_index_completed_at: Date | null;
+      opening_index_error: string | null;
       max_games: number | null;
       total_games: number;
       inserted_games: number;
@@ -785,6 +839,14 @@ export async function registerImportRoutes(
         id,
         status,
         strict_duplicate_mode,
+        position_index_status,
+        position_index_requested_at,
+        position_index_completed_at,
+        position_index_error,
+        opening_index_status,
+        opening_index_requested_at,
+        opening_index_completed_at,
+        opening_index_error,
         max_games,
         total_games,
         inserted_games,
@@ -818,6 +880,36 @@ export async function registerImportRoutes(
           duplicateReasons: {
             byMoves: row.duplicate_by_moves,
             byCanonical: row.duplicate_by_canonical,
+          },
+        },
+        indexing: {
+          position: {
+            rawStatus: row.position_index_status,
+            status:
+              row.position_index_status === "queued" || row.position_index_status === "running"
+                ? "indexing"
+                : row.position_index_status === "indexed"
+                  ? "indexed"
+                  : row.position_index_status === "failed"
+                    ? "failed"
+                    : "not_indexed",
+            requestedAt: row.position_index_requested_at?.toISOString() ?? null,
+            completedAt: row.position_index_completed_at?.toISOString() ?? null,
+            error: row.position_index_error,
+          },
+          opening: {
+            rawStatus: row.opening_index_status,
+            status:
+              row.opening_index_status === "queued" || row.opening_index_status === "running"
+                ? "indexing"
+                : row.opening_index_status === "indexed"
+                  ? "indexed"
+                  : row.opening_index_status === "failed"
+                    ? "failed"
+                    : "not_indexed",
+            requestedAt: row.opening_index_requested_at?.toISOString() ?? null,
+            completedAt: row.opening_index_completed_at?.toISOString() ?? null,
+            error: row.opening_index_error,
           },
         },
         createdAt: row.created_at.toISOString(),

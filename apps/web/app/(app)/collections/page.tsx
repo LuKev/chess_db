@@ -113,6 +113,7 @@ export default function CollectionsPage() {
           <h2>Collections</h2>
           <div className="button-row">
             <Link href="/games">Games</Link>
+            <Link href="/reports">Prep reports</Link>
             <Link href="/diagnostics">Diagnostics</Link>
           </div>
         </div>
@@ -185,6 +186,10 @@ export default function CollectionsPage() {
                     <td>{new Date(collection.updatedAt).toLocaleString()}</td>
                     <td>
                       <div className="button-row">
+                        <Link href={`/games?collectionId=${collection.id}`}>Open</Link>
+                        <Link href={`/reports?collectionId=${collection.id}&title=${encodeURIComponent(collection.name)}`}>
+                          Report
+                        </Link>
                         <button
                           type="button"
                           onClick={() => {
@@ -215,4 +220,3 @@ export default function CollectionsPage() {
     </main>
   );
 }
-
