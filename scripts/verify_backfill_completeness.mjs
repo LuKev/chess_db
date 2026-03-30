@@ -17,7 +17,7 @@ if (!Number.isInteger(activeWindowDays) || activeWindowDays <= 0) {
 async function run() {
   const pool = new Pool({ connectionString: databaseUrl });
   try {
-    const activeUsers = await pool.query<{ user_id: string }>(
+    const activeUsers = await pool.query(
       `SELECT DISTINCT g.user_id::text AS user_id
        FROM games g
        WHERE g.created_at >= NOW() - ($1::text || ' days')::interval`,
@@ -26,7 +26,7 @@ async function run() {
 
     const activeUserIds = activeUsers.rows.map((row) => Number(row.user_id));
 
-    const missingPositionGames = await pool.query<{ total: string }>(
+    const missingPositionGames = await pool.query(
       `SELECT COUNT(*)::text AS total
        FROM games g
        WHERE g.user_id = ANY($1::bigint[])
@@ -39,7 +39,7 @@ async function run() {
       [activeUserIds.length > 0 ? activeUserIds : [-1]]
     );
 
-    const usersWithoutOpeningStats = await pool.query<{ total: string }>(
+    const usersWithoutOpeningStats = await pool.query(
       `SELECT COUNT(*)::text AS total
        FROM (
          SELECT u.user_id

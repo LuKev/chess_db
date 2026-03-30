@@ -15,7 +15,7 @@ import {
 type ProcessImportJobParams = {
   pool: Pool;
   storage: ObjectStorage;
-  positionBackfillQueue: PositionBackfillQueue;
+  positionBackfillQueue?: PositionBackfillQueue;
   importJobId: number;
   userId: number;
 };
@@ -308,41 +308,48 @@ export async function processImportJob(
     });
 
     if (counters.inserted > 0) {
-      try {
-        await markImportJobIndexQueued(params.pool, {
+      if (params.positionBackfillQueue) {
+        try {
+          await markImportJobIndexQueued(params.pool, {
+            importJobId: params.importJobId,
+            kinds: ["position", "opening"],
+          });
+          await markUserIndexQueued(params.pool, {
+            userId: params.userId,
+            kinds: ["position", "opening"],
+          });
+          await params.positionBackfillQueue.enqueuePositionBackfill({
+            userId: params.userId,
+          });
+        } catch (error) {
+          const message = String(error);
+          await markPendingImportJobsFailed(params.pool, {
+            userId: params.userId,
+            kind: "position",
+            error: message,
+          });
+          await markPendingImportJobsFailed(params.pool, {
+            userId: params.userId,
+            kind: "opening",
+            error: message,
+          });
+          await markUserIndexFailed(params.pool, {
+            userId: params.userId,
+            kind: "position",
+            error: message,
+          });
+          await markUserIndexFailed(params.pool, {
+            userId: params.userId,
+            kind: "opening",
+            error: message,
+          });
+          throw error;
+        }
+      } else {
+        await markImportJobIndexSkipped(params.pool, {
           importJobId: params.importJobId,
           kinds: ["position", "opening"],
         });
-        await markUserIndexQueued(params.pool, {
-          userId: params.userId,
-          kinds: ["position", "opening"],
-        });
-        await params.positionBackfillQueue.enqueuePositionBackfill({
-          userId: params.userId,
-        });
-      } catch (error) {
-        const message = String(error);
-        await markPendingImportJobsFailed(params.pool, {
-          userId: params.userId,
-          kind: "position",
-          error: message,
-        });
-        await markPendingImportJobsFailed(params.pool, {
-          userId: params.userId,
-          kind: "opening",
-          error: message,
-        });
-        await markUserIndexFailed(params.pool, {
-          userId: params.userId,
-          kind: "position",
-          error: message,
-        });
-        await markUserIndexFailed(params.pool, {
-          userId: params.userId,
-          kind: "opening",
-          error: message,
-        });
-        throw error;
       }
     } else {
       await markImportJobIndexSkipped(params.pool, {

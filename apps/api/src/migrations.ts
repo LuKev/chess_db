@@ -50,7 +50,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
     await pool.query("BEGIN");
     try {
       await pool.query(sql);
-      await pool.query("INSERT INTO schema_migrations (id) VALUES ($1)", [id]);
+      await pool.query(
+        "INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING",
+        [id]
+      );
       await pool.query("COMMIT");
     } catch (error) {
       await pool.query("ROLLBACK");

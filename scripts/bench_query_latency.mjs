@@ -34,6 +34,29 @@ if (!Number.isInteger(requestCount) || requestCount <= 0) {
 const requestJsonApi = (path, options = {}) =>
   requestJson(apiBaseUrl, path, options);
 
+const BENCH_LINES = [
+  {
+    eco: "B44",
+    line: ["e4", "c5", "Nf3", "Nc6"],
+    pgn: "1. e4 c5 2. Nf3 Nc6",
+  },
+  {
+    eco: "C65",
+    line: ["e4", "e5", "Nf3", "Nc6", "Bb5", "a6"],
+    pgn: "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6",
+  },
+  {
+    eco: "D37",
+    line: ["d4", "d5", "c4", "e6", "Nc3", "Nf6"],
+    pgn: "1. d4 d5 2. c4 e6 3. Nc3 Nf6",
+  },
+  {
+    eco: "E60",
+    line: ["d4", "Nf6", "c4", "g6", "Nc3", "Bg7"],
+    pgn: "1. d4 Nf6 2. c4 g6 3. Nc3 Bg7",
+  },
+];
+
 async function authenticate() {
   const cookie = await registerAndLogin({
     baseUrl: apiBaseUrl,
@@ -57,6 +80,38 @@ async function authenticate() {
   };
 }
 
+async function ensureBenchmarkArtifacts(pool, userId) {
+  for (const line of BENCH_LINES) {
+    await pool.query(
+      `INSERT INTO game_moves (game_id, move_tree)
+       SELECT g.id, $3::jsonb
+       FROM games g
+       WHERE g.user_id = $1
+         AND g.eco = $2
+         AND NOT EXISTS (
+           SELECT 1
+           FROM game_moves gm
+           WHERE gm.game_id = g.id
+         )`,
+      [userId, line.eco, JSON.stringify({ mainline: line.line })]
+    );
+
+    await pool.query(
+      `INSERT INTO game_pgn (game_id, pgn_text)
+       SELECT g.id, $3
+       FROM games g
+       WHERE g.user_id = $1
+         AND g.eco = $2
+         AND NOT EXISTS (
+           SELECT 1
+           FROM game_pgn gp
+           WHERE gp.game_id = g.id
+         )`,
+      [userId, line.eco, `[Event "BenchQuery"]\n\n${line.pgn} *`]
+    );
+  }
+}
+
 async function ensureBenchmarkDataset(pool, userId) {
   const existingResult = await pool.query(
     `SELECT COUNT(*)::text AS total
@@ -67,6 +122,7 @@ async function ensureBenchmarkDataset(pool, userId) {
   const existing = Number(existingResult.rows[0].total);
 
   if (existing >= targetGames) {
+    await ensureBenchmarkArtifacts(pool, userId);
     return existing;
   }
 
@@ -112,6 +168,8 @@ async function ensureBenchmarkDataset(pool, userId) {
     ON CONFLICT DO NOTHING`,
     [userId, toInsert, existing]
   );
+
+  await ensureBenchmarkArtifacts(pool, userId);
 
   const totalResult = await pool.query(
     `SELECT COUNT(*)::text AS total
