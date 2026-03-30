@@ -8,6 +8,10 @@ import {
 } from "./lib/api_client.mjs";
 
 const apiBaseUrl = resolveApiBaseUrl();
+const requestOrigin =
+  process.env.PUBLIC_WEB_ORIGIN?.trim() ||
+  process.env.CORS_ORIGIN?.split(",")[0]?.trim() ||
+  apiBaseUrl;
 const { email: benchEmail, password: benchPassword } = resolveBenchCredentials({
   prefix: "bench-slo",
 });
@@ -208,6 +212,7 @@ async function run() {
         headers: {
           "content-type": "application/json",
           cookie,
+          origin: requestOrigin,
         },
         body: JSON.stringify({
           fen: startFen,

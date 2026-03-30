@@ -43,9 +43,17 @@ export async function requestJson(baseUrl, path, init = {}) {
   const hasBody = init.body !== undefined && init.body !== null;
   const isFormData =
     typeof FormData !== "undefined" && init.body instanceof FormData;
+  const method = (init.method ?? "GET").toUpperCase();
+  const requestOrigin =
+    process.env.PUBLIC_WEB_ORIGIN?.trim() ||
+    process.env.CORS_ORIGIN?.split(",")[0]?.trim() ||
+    baseUrl;
 
   if (hasBody && !isFormData && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
+  }
+  if (!headers.has("origin") && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+    headers.set("origin", requestOrigin);
   }
 
   const response = await fetch(`${baseUrl}${path}`, {

@@ -328,7 +328,7 @@ async function buildPrepReport(pool: Pool, userId: number, scope: z.infer<typeof
       gp.fen_norm,
       COUNT(*)::text AS appearances,
       COUNT(DISTINCT gp.game_id)::text AS game_count,
-      ARRAY_REMOVE(ARRAY_AGG(DISTINCT gp.next_move_uci ORDER BY gp.next_move_uci), NULL)[1:4] AS next_moves
+      (ARRAY_REMOVE(ARRAY_AGG(DISTINCT gp.next_move_uci ORDER BY gp.next_move_uci), NULL))[1:4] AS next_moves
      FROM game_positions gp
      JOIN games g ON g.id = gp.game_id
      WHERE ${whereSql}

@@ -4,6 +4,8 @@ import { loadWorkerConfig } from "./config.js";
 import { createPool } from "./db.js";
 import {
   ANALYSIS_QUEUE_NAME,
+  AUTO_ANNOTATION_QUEUE_NAME,
+  type AutoAnnotationJobPayload,
   type AnalysisJobPayload,
   createBullmqConnection,
   EXPORT_QUEUE_NAME,
@@ -21,6 +23,7 @@ import {
 } from "./infrastructure/queue.js";
 import { createObjectStorage } from "./infrastructure/storage.js";
 import { processAnalysisJob } from "./analysis/process_analysis_job.js";
+import { processAutoAnnotationJob } from "./analysis/process_auto_annotation_job.js";
 import { processGameAnalysisJob } from "./analysis/process_game_analysis_job.js";
 import { processExportJob } from "./exports/process_export_job.js";
 import { processImportJob } from "./imports/process_import_job.js";
@@ -76,6 +79,9 @@ const importQueueStats = new Queue(IMPORT_QUEUE_NAME, {
   connection: bullmqConnection,
 });
 const analysisQueueStats = new Queue(ANALYSIS_QUEUE_NAME, {
+  connection: bullmqConnection,
+});
+const autoAnnotationQueueStats = new Queue(AUTO_ANNOTATION_QUEUE_NAME, {
   connection: bullmqConnection,
 });
 const exportQueueStats = new Queue(EXPORT_QUEUE_NAME, {
@@ -266,6 +272,25 @@ const gameAnalysisWorker = new Worker<GameAnalysisJobPayload>(
   }
 );
 
+const autoAnnotationWorker = new Worker<AutoAnnotationJobPayload>(
+  AUTO_ANNOTATION_QUEUE_NAME,
+  async (job) => {
+    await runInstrumentedJob(AUTO_ANNOTATION_QUEUE_NAME, async () => {
+      await processAutoAnnotationJob({
+        pool,
+        autoAnnotationJobId: job.data.autoAnnotationJobId,
+        userId: job.data.userId,
+        stockfishBinary: config.stockfishBinary,
+        cancelPollMs: config.analysisCancelPollMs,
+      });
+    });
+  },
+  {
+    connection: bullmqConnection,
+    concurrency: Math.max(1, Math.floor(config.workerConcurrency / 2)),
+  }
+);
+
 const positionBackfillWorker = new Worker<PositionBackfillPayload>(
   POSITION_BACKFILL_QUEUE_NAME,
   async (job) => {
@@ -355,6 +380,20 @@ gameAnalysisWorker.on("failed", (job, error) => {
   });
 });
 
+autoAnnotationWorker.on("completed", (job) => {
+  console.log(`[worker] completed auto annotation job ${job.id}`);
+});
+
+autoAnnotationWorker.on("failed", (job, error) => {
+  console.error(`[worker] failed auto annotation job ${job?.id}: ${String(error)}`);
+  captureException(error);
+  void recordDeadLetter({
+    queueName: AUTO_ANNOTATION_QUEUE_NAME,
+    job,
+    error,
+  });
+});
+
 positionBackfillWorker.on("completed", (job) => {
   console.log(`[worker] completed position backfill job ${job.id}`);
 });
@@ -392,6 +431,10 @@ async function refreshQueueDepthMetrics(): Promise<void> {
     (await analysisQueueStats.getWaitingCount()) +
     (await analysisQueueStats.getActiveCount()) +
     (await analysisQueueStats.getDelayedCount());
+  const autoAnnotationDepth =
+    (await autoAnnotationQueueStats.getWaitingCount()) +
+    (await autoAnnotationQueueStats.getActiveCount()) +
+    (await autoAnnotationQueueStats.getDelayedCount());
   const exportDepth =
     (await exportQueueStats.getWaitingCount()) +
     (await exportQueueStats.getActiveCount()) +
@@ -411,6 +454,7 @@ async function refreshQueueDepthMetrics(): Promise<void> {
 
   updateQueueDepthMetric(metrics, IMPORT_QUEUE_NAME, importDepth);
   updateQueueDepthMetric(metrics, ANALYSIS_QUEUE_NAME, analysisDepth);
+  updateQueueDepthMetric(metrics, AUTO_ANNOTATION_QUEUE_NAME, autoAnnotationDepth);
   updateQueueDepthMetric(metrics, EXPORT_QUEUE_NAME, exportDepth);
   updateQueueDepthMetric(metrics, GAME_ANALYSIS_QUEUE_NAME, gameAnalysisDepth);
   updateQueueDepthMetric(metrics, POSITION_BACKFILL_QUEUE_NAME, positionBackfillDepth);
@@ -447,6 +491,7 @@ async function shutdown(signal: string): Promise<void> {
 
   await importWorker.close();
   await analysisWorker.close();
+  await autoAnnotationWorker.close();
   await exportWorker.close();
   await gameAnalysisWorker.close();
   await positionBackfillWorker.close();
@@ -454,6 +499,7 @@ async function shutdown(signal: string): Promise<void> {
 
   await importQueueStats.close();
   await analysisQueueStats.close();
+  await autoAnnotationQueueStats.close();
   await exportQueueStats.close();
   await gameAnalysisQueueStats.close();
   await positionBackfillQueueStats.close();
